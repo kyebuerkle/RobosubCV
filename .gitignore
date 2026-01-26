@@ -1,0 +1,23 @@
+# 	Builds
+**/build/
+
+#	Object & Library Files
+*.o
+*.obj
+*.a
+*.lib
+*.la
+*.lo
+
+# Executables
+**/bin/
+*.exe
+*.out
+*.app
+*.i?86
+*.x86_64
+*.hex
+
+# Window Zone Identifiers
+*\:Zone.Identifier
+**\:Zone.Identifier
