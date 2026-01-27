@@ -21,12 +21,39 @@ The goal is to keep our history linear on the main / master branch. Every push t
 
 ###		Push a change for review
 
-(NOTE: I need to finalize this process with Josh)
-The goal for this is to make sure history is linear and simple. So a merge should be squashed to one commit with a comment simular to "feat: Added Subsystem" 
-Ways to do this: `git rebase -i [name]` and in the text editor change all commits to `f` (fixup) except for the very first one use `p` (pick) or `e` (edit)
-Another option is: `git reset --soft main`, this is a bit weird as it keeps your current 'workstation' and puts it on top of main. then you can commit what you want and add the message. (this method is a bit risky)
-final option is both. use `git reset --soft [previous commits]` to make your feature 1 commit and rewrite history, and then rebase it.
+On the `main` branch, we want to keep a linear history. To do this there can't be any merging (unfortunatly GitHub makes us pay to add rulesets that automatically ensure this, so we'll have to be extra carefull).
 
-Honestly, the rebase interactive mode is safest, and keeps the branch history seperate from the main branch, but keeps main linear as well. For this project it is safe, fast, and relativly easy. 
+Once a branch is ready for review:
+1. Push your branch: `git push origin [name]`
+2. Ask for review on GitHub
+   1. Access the branch on GitHub and press review
+   2. Put down person for review (Kye can do most)
 
-For each rebase, we need to review the program. GitHub lets us do these reviews, but doesn't rebase it. So that has to be done manualy after review. 
+After the program has been reviewed, rebase to main:
+1. rebase interactive mode: `git rebase -i [name]`
+2. Top commit use `p` (pick), or `e` (edit)
+   1. Change message to include the feature
+   2. Ex: "feat: Training script for YOLOv8 model"
+3. All other commits type `f` (fixup) or `s` (squash)
+   1. squash keeps all the messages, fixup doesn't
+4. Save and exit text editor
+   1. verifiy rebase worked: `git log -5`
+
+###		Re-writing History
+
+In git, you can re-write the history of your branch. You can do this to make each commit more meaningful and organized even if it's not chronologically correct. You can do this to help simplify your branch before rebasing, or make the whole feature in one commit without squashing.
+
+Some key re-writing commands:
+- `git rebase -i`
+  - rebase your own branch and squash or edit different commits
+- `git reset --hard [commit]`
+  - resets to a previous commit, changes entire workshop to that commit
+  - workshop is the current files you can see (`git status` menu)
+  - this is safe, you can go back to previous commits and 'undo' resets from remote
+  - instead of `[commit]` you can also put in a branch name
+- `git reset --soft [commit]`
+  - resets to a pervious commit, keeps entire workshop
+  - workshop is the current files you can see (`git status` menu)
+  - this is not safe, as going back will have future files in workshop, this command is the one that truely re-writes the history
+    - Needs a `git push --force` to actually merge on remote because it is unsafe
+  - instead of `[commit]` you can also put in a branch name
