@@ -6,6 +6,7 @@ data/*
 
 # 	Builds
 **/build/
+**/__pycache__/
 
 #	Object & Library Files
 *.o

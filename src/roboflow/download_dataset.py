@@ -8,6 +8,7 @@ import argparse
 import sys
 import os
 import json
+import shutil
 
 # .json settings file path
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roboflow_config.json")
@@ -67,6 +68,7 @@ def roboflow_download():
 	parser.add_argument('-v', "--version", help = "versions of project, default 1", type=int, default = config.get("version"))
 	parser.add_argument('-k', "--key", help = "api key for Roboflow login", default=None)
 	parser.add_argument('-f', "--format", help = "model format of images", default = "coco")
+	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 
@@ -90,7 +92,17 @@ def roboflow_download():
 
 	output_dir = os.path.join(directory_r, f"{project_r}-{version_r}")
 	if os.path.exists(output_dir):
-		print("Dataset already exists, Roboflow overwriting...")
+		print("Dataset already exists, Do you wish to overwrite?")
+		if args.yes:
+			response = "y"
+		else:
+			response = input("[y/n] ")
+		if response.lower() == "y":
+			try:
+				shutil.rmtree(output_dir)
+			except Exception as e:
+				print(f"Failed to delete previous dataset at: {output_dir}\n{e}")
+				sys.exit(1)
 
 	#	login to roboflow & download dataset
 	try:
@@ -102,7 +114,7 @@ def roboflow_download():
 		print(f"Dataset name: {dataset.name}")
 		print(f"Dataset version: {dataset.version}")
 	except Exception as e:
-		print(f"Failed to download dataset from config file: {CONFIG_PATH}\n {e}")
+		print(f"Failed to download dataset from config file: {CONFIG_PATH}\n{e}")
 		sys.exit(1)
 
 	#	saving new json config
