@@ -1,3 +1,9 @@
+#	Datasets & Setting files
+data/*
+!data/README.md
+.json
+.ini
+
 # 	Builds
 **/build/
 
