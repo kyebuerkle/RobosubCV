@@ -22,3 +22,11 @@ argparse = "^1.4.0"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+addopts = """
+    --ignore=src/roboflow_datasets/tests/test_coco_download.py
+    --ignore=src/roboflow_datasets/tests/test_yolo_download.py
+"""

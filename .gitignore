@@ -3,6 +3,8 @@ data/*
 !data/README.md
 *.json
 *.ini
+!pytest.ini
+!**/pytest.ini
 
 # 	Builds
 **/build/
