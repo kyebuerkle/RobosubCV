@@ -9,6 +9,9 @@ import json
 import os
 import shutil
 
+# .json settings file path
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roboflow_config.json")
+
 def load_json(path):
     if not os.path.exists(path):
         return {}
@@ -104,3 +107,25 @@ def roboflow_download(config):
 	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
 	save_json(**config_save)
 	return dataset
+
+#	@brief: uploads dataset to roboflow
+#	@param: config -> config dictionary
+def roboflow_upload(config):
+	input_dir = os.path.join(config.get("directory"), config.get("dataset"))
+	if not os.path.exists(input_dir):
+		print(f"No path exists to upload: {input_dir}")
+		return
+	
+	try:
+		rf = roboflow_login(api_key=config.get("key"))
+		workspace = rf.workspace(config.get("workspace"))
+		workspace.upload_dataset(
+			input_dir,
+			config.get("project"),
+			#dataset_format = config.get("format"),
+			project_license = "MIT",
+    		project_type = "object-detection"
+			)
+	except Exception as e:
+		print(f"Failed to upload dateset from config file: {config.get("config_path", "no path")}")
+		return

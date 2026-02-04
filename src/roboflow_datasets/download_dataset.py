@@ -6,10 +6,7 @@
 import argparse
 import sys
 import os
-from dataset_module import config_dict, roboflow_download 
-
-# .json settings file path
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roboflow_config.json")
+from dataset_module import CONFIG_PATH, config_dict, roboflow_download 
 
 # --------- Main Function ----------
 if __name__ == "__main__":
