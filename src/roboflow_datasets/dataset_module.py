@@ -63,6 +63,15 @@ def config_dict(config_path, **argv):
 		json_file = load_json(config_path)
 		config.update(json_file)
 
+	#	parsing URL argument
+	if "url" in argv:
+		temp_space = argv.pop("url").split("/")
+		argv.update({
+			"workspace": temp_space[-3], 
+			"project": temp_space[-2], 
+			"version": temp_space[-1]
+			})
+
 	config.update(argv)
 
 	#	check args		
@@ -104,7 +113,7 @@ def roboflow_download(config):
 		print(f"Failed to download dataset from config file: {config.get("config_path", "no path")}\n{e}")
 		return False
 	#	saving new json config
-	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
+	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
 	save_json(**config_save)
 	return dataset
 
@@ -129,3 +138,7 @@ def roboflow_upload(config):
 	except Exception as e:
 		print(f"Failed to upload dateset from config file: {config.get("config_path", "no path")}")
 		return
+	
+	#	saving new json config
+	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
+	save_json(**config_save)
