@@ -81,6 +81,26 @@ class TestDatasetModule:
 				"verbose": False
 			}
 		
+	def test_url_parse(self, directory_in):
+		if (not os.path.exists(CONFIG_PATH)):
+			pytest.fail(f"Config file ({CONFIG_PATH}) doesn't exist")
+			return
+		
+		input_args = {"url": "https://app.roboflow.com/workspace-url/project-id/3"}
+		results = config_dict(CONFIG_PATH, **input_args)
+		assert results == {
+				"config_path": CONFIG_PATH,
+				"directory" : directory_in,
+				"dataset" : "project-id-v3",
+				"workspace" : "workspace-url",
+				"project" : "project-id",
+				"version" : 3,
+				"key" : None,
+				"format" : "coco",
+				"yes" : False,
+				"verbose": False
+			}
+		
 	def test_cleanup(self):
 		if os.path.exists(CONFIG_PATH):
 			os.remove(CONFIG_PATH)

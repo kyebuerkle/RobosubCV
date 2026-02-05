@@ -17,6 +17,7 @@ if __name__ == "__main__":
 		argument_default = argparse.SUPPRESS
 		)
 
+	parser.add_argument('-u', "--url", help = "Input the URL of the roboflow project")
 	parser.add_argument('-d', "--directory", help = "output directory")
 	parser.add_argument('-w', "--workspace", help = "roboflow workspace")
 	parser.add_argument('-p', "--project", help = "Project ID from rboflow")

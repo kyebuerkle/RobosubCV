@@ -66,10 +66,15 @@ def config_dict(config_path, **argv):
 	#	parsing URL argument
 	if "url" in argv:
 		temp_space = argv.pop("url").split("/")
+		try:
+			version_temp = int(temp_space[-1])
+		except:
+			return None
+		
 		argv.update({
 			"workspace": temp_space[-3], 
 			"project": temp_space[-2], 
-			"version": temp_space[-1]
+			"version": version_temp
 			})
 
 	config.update(argv)
