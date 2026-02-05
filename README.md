@@ -58,3 +58,13 @@ Go to: https://python-poetry.org/docs/basic-usage/ to install and read through s
 
 To install poetry run: `pipx install poetry` or `pip install poetry`
 (pipx is prefered as it isolates the poetry environment from other dependencies you have installed)
+
+##    Verifications
+
+This repo has unit tests utilizing pytest. To verify them run:
+```
+poetry run pytest
+```
+
+this will run through all unit tests in any directory under 'src'
+use `-v` for verbose and get more information

@@ -3,12 +3,12 @@ data/*
 !data/README.md
 *.json
 *.ini
-!pytest.ini
 !**/pytest.ini
 
 # 	Builds
 **/build/
 **/__pycache__/
+**/.pytest_cache
 
 #	Object & Library Files
 *.o
