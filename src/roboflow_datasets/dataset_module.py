@@ -180,6 +180,11 @@ def robo_arg_parse(config_path = CONFIG_PATH):
 	args = parser.parse_args()
 	arg_dict = vars(args)
 
+	#	deletes key if nothing was done to it
+	key_temp = arg_dict.get("key", None)
+	if (not key_temp is None) and (key_temp == "[API KEY]"):
+		arg_dict.pop("key")
+
 	config = config_dict(config_path, **arg_dict)
 	if config is None:
 		print("Failed to configure arguments")

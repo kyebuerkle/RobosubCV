@@ -28,6 +28,24 @@ To use this, first login you must be in the Tempest web: [Tempest](https://tempe
 
 To double check you have the environment run: `conda env list` and one of the environments should have *Training* at the end
 
+###		Without API
+
+If you don't want to use the API Key there is another way to sign into Roboflow.
+
+1. go to your Tempest Terminal
+2. Activate the Training environment
+   1. `source activate Training`
+3. run: `poetry run python src/roboflow_dataset/roboflow_login.py`
+4. This will tell you to use an authentication key
+   1. Go to the URL that they paste in the terminal
+   2. copy and paste that key back 
+5. On success the terminal will print 1 of 2 options:
+   1. `Successful login!`
+   2. `You are already logged into Roboflow. To make a different login,run roboflow.login(force=True).`
+      1. this means you logged in previously and it saved your data
+   3. This command will also print a *default workspace*, this just helps verify that you are logged in correctly
+      1. if it can't find one, it shouldn't be an issue if you use the URL in the training correctly
+
 ###		Roboflow API & URL
 
 To access your API Key go to [app.roboflow.com](https://app.roboflow.com) and sign in.

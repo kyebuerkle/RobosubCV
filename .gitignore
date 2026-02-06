@@ -1,6 +1,8 @@
 #	Datasets & Setting files
 data/*
 !data/README.md
+results/*
+!results/README.md
 *.json
 *.ini
 !**/pytest.ini
