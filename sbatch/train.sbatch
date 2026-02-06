@@ -22,4 +22,4 @@ source activate $HOME/.conda/envs/Training
 
 ROBOFLOW_URL=https://app.roboflow.com/trying-to-sign-in/2025-robosub-on-site-l7qeg-moyor/2
 
-poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL
+poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL -k xiYgPhKlXZQqSCJ9gdZd -y

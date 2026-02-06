@@ -4,6 +4,7 @@
 #		This library manages all the Roboflow functionality
 #		Uploading and Downloading
 
+import argparse
 import roboflow
 import json
 import os
@@ -147,3 +148,32 @@ def roboflow_upload(config):
 	#	saving new json config
 	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
 	save_json(**config_save)
+
+#	@brief: argument parser for anything roboflow related
+#	@return: config dictionary, nOne if failed
+#	NOTE: I used this in 3 scripts so it belonged as a funciton
+def robo_arg_parse(config_path = CONFIG_PATH):
+	parser = argparse.ArgumentParser(
+		prog = "download_dataset.py",
+		description = "downloads a dataset from roboflow",
+		argument_default = argparse.SUPPRESS
+		)
+	
+	parser.add_argument('-u', "--url", help = "Input the URL of the roboflow project")
+	parser.add_argument('-d', "--directory", help = "output directory")
+	parser.add_argument('-w', "--workspace", help = "roboflow workspace")
+	parser.add_argument('-p', "--project", help = "Project ID from rboflow")
+	parser.add_argument('-v', "--version", help = "versions of project, default 1", type=int)
+	parser.add_argument('-k', "--key", help = "api key for Roboflow login")
+	parser.add_argument('-f', "--format", help = "model format of images")
+	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
+	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
+	args = parser.parse_args()
+	arg_dict = vars(args)
+
+	config = config_dict(config_path, **arg_dict)
+	if config is None:
+		print("Failed to configure arguments")
+		return None
+	
+	return config

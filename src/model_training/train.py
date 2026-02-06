@@ -1,23 +1,34 @@
 #	@file: train.py
 #	@brief: trains the YOLO model in Tempest
 
+import os
+import sys
+import argparse
 from ultralytics import YOLO
-from roboflow import Roboflow
-
-# load local data
-DATASET = '/home/v67n884/tempestTraining/Data/dataset-full-mixed-3/data.yaml' # absolute path to data.yaml
-# local path to save run to
-SAVE_TO = '/home/v67n884/tempestTraining/Results/Full-Mixed-3'
+from roboflow_datasets import robo_arg_parse, roboflow_download
 
 if __name__ == "__main__":
-    model = YOLO("yolov8m.pt")
-    save_dir = '/home/v67n884/RobosubCV/results'
-    results = model.train(data=DATASET,
-                          epochs=100,
+	# edit these varibales for save path and model
+	model = YOLO("yolov8m.pt")
+	save_dir = '/home/v67n884/RobosubCV/results'
+    
+	config = robo_arg_parse()
+	if config is None:
+		print("Failed to configure arguments")
+		sys.exit(1)
+
+	dataset = roboflow_download(config)
+
+	if not os.path.exists(config.get("dataset")):
+		print(f"No dataset at dir: {config.get("dataset")}")
+		sys.exit(1)
+
+	results = model.train(data=config.get("dataset"),
+                          epochs=10,
                           imgsz=640,
-                          patience=15,
+                          patience=10,
                           cache=False,
                           seed=17,
                           device=[0,1,2,3],
-                          project=SAVE_TO,
+                          project=save_dir,
                           )
