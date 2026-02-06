@@ -17,6 +17,8 @@ data/*
 *.lib
 *.la
 *.lo
+*.err
+*.pt
 
 # Executables
 **/bin/
