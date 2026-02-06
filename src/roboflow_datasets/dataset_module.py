@@ -182,7 +182,7 @@ def robo_arg_parse(config_path = CONFIG_PATH):
 
 	#	deletes key if nothing was done to it
 	key_temp = arg_dict.get("key", None)
-	if (not key_temp is None) and (key_temp == "[API KEY]"):
+	if (not key_temp is None) and (key_temp == "[API_KEY]"):
 		arg_dict.pop("key")
 
 	config = config_dict(config_path, **arg_dict)
