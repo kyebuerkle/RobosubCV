@@ -15,18 +15,19 @@ if __name__ == "__main__":
 		print("Failed to configure arguments")
 		sys.exit(1)
 
+	#	format should be yolov8
+	config.update(format = "yolov8")
 	dataset = roboflow_download(config)
+	dataset_dir = os.path.join(config.get("directory"), config.get("dataset"))
 
-	if not os.path.exists(config.get("dataset")):
-		print(f"No dataset at dir: {config.get("dataset")}")
+	if not os.path.exists(dataset_dir):
+		print(f"No dataset at dir: {dataset_dir}")
 		sys.exit(1)
 	if "save" not in config:
 		print(f"No save directory for model")
 		sys.exit(1)
-
 	os.makedirs(config.get("save"), exist_ok = True)
 
-	dataset_dir = os.path.join(config.get("directory"), config.get("dataset"))
 	results = model.train(data = dataset_dir,
                           epochs = 10,
                           imgsz = 640,
