@@ -20,7 +20,8 @@ module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 
 SAVE_DIR=$HOME/RobosubCV/results
-ROBOFLOW_URL=https://app.roboflow.com/trying-to-sign-in/2025-robosub-on-site-l7qeg-moyor/2
+ROBOFLOW_API=[API KEY]
+ROBOFLOW_URL=[ROBOFLOW URL]
 
 poetry install
-poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k xiYgPhKlXZQqSCJ9gdZd -y
+poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -y
