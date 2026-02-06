@@ -167,6 +167,7 @@ def robo_arg_parse(config_path = CONFIG_PATH):
 	parser.add_argument('-k', "--key", help = "api key for Roboflow login")
 	parser.add_argument('-f', "--format", help = "model format of images")
 	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
+	parser.add_argument('-s', "--save", help="save directory for the training model")
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 	arg_dict = vars(args)

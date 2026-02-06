@@ -3,14 +3,12 @@
 
 import os
 import sys
-import argparse
+import shutil
 from ultralytics import YOLO
 from roboflow_datasets import robo_arg_parse, roboflow_download
 
 if __name__ == "__main__":
-	# edit these varibales for save path and model
 	model = YOLO("yolov8m.pt")
-	save_dir = '/home/v67n884/RobosubCV/results'
     
 	config = robo_arg_parse()
 	if config is None:
@@ -22,13 +20,18 @@ if __name__ == "__main__":
 	if not os.path.exists(config.get("dataset")):
 		print(f"No dataset at dir: {config.get("dataset")}")
 		sys.exit(1)
+	if "save" not in config:
+		print(f"No save directory for model")
+		sys.exit(1)
 
-	results = model.train(data=config.get("dataset"),
-                          epochs=10,
-                          imgsz=640,
-                          patience=10,
-                          cache=False,
-                          seed=17,
-                          device=[0,1,2,3],
-                          project=save_dir,
+	os.makedirs(config.get("save"), exist_ok = True)
+
+	results = model.train(data = config.get("dataset"),
+                          epochs = 10,
+                          imgsz = 640,
+                          patience = 10,
+                          cache = False,
+                          seed = 17,
+                          device = [0,1,2,3],
+                          project = config.get("save"),
                           )
