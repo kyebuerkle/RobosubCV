@@ -3,6 +3,9 @@
 #	brief: module for the dataset library
 #		This library manages all the Roboflow functionality
 #		Uploading and Downloading
+#	TODO: It is a little stupid to put all my vars in a dictionary
+#		I should make it into a Config class, that way it has functions
+#		relating to it (but I'll do this after designing the minimum model)
 
 import argparse
 import roboflow
@@ -23,7 +26,12 @@ def save_json(**dict):
 	if not dict.get("config_path"):
 		print(f"Failed to save json file with config: {dict}")
 		return
+	
 	with open(dict.get("config_path"), "w") as f:
+		#	list of values to NOT save 
+		for k in ["config_path", "key", "yes", "format", "verbose"]:	
+			if k in dict:
+				dict.pop(k)
 		json.dump(dict, f, indent = 2)
 
 #	@brief: logs into roboflow with api, or user
@@ -119,8 +127,8 @@ def roboflow_download(config):
 		print(f"Failed to download dataset from config file: {config.get("config_path", "no path")}\n{e}")
 		return False
 	#	saving new json config
-	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
-	save_json(**config_save)
+	#config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
+	save_json(**config)
 	return dataset
 
 #	@brief: uploads dataset to roboflow
@@ -146,8 +154,8 @@ def roboflow_upload(config):
 		return
 	
 	#	saving new json config
-	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
-	save_json(**config_save)
+	#config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
+	save_json(**config)
 
 #	@brief: argument parser for anything roboflow related
 #	@return: config dictionary, nOne if failed

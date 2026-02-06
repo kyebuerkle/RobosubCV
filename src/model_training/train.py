@@ -26,7 +26,8 @@ if __name__ == "__main__":
 
 	os.makedirs(config.get("save"), exist_ok = True)
 
-	results = model.train(data = config.get("dataset"),
+	dataset_dir = os.path.join(config.get("directory"), config.get("dataset"))
+	results = model.train(data = dataset_dir,
                           epochs = 10,
                           imgsz = 640,
                           patience = 10,
