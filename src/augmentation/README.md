@@ -5,3 +5,7 @@ Image Augmentaion Subsystem. This system augments the training and validation im
 ##		Usage
 
 ...
+
+##		Tests
+
+run `poetry run pytest` for all the unit tests of geometric and photometric augmentations

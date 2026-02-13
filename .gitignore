@@ -6,6 +6,8 @@ results/*
 *.json
 *.ini
 !**/pytest.ini
+sbatch/stream-out/*
+!sbatch/stream-out/README.md
 
 # 	Builds
 **/build/

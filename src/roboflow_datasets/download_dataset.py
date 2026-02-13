@@ -5,17 +5,16 @@
 
 import sys
 import os
-from dataset_module import roboflow_download, robo_arg_parse
+from dataset_config import Config
+from dataset_module import robo_arg_parse
 
 # --------- Main Function ----------
 if __name__ == "__main__":
 	# parse the arguments
-	config = robo_arg_parse()
-	if config is None:
-		print("Failed to configure arguments")
-		sys.exit(1)
+	arg_dict = robo_arg_parse()
+	config = Config(arg_dict)
 	
-	dataset = roboflow_download(config)
+	dataset = config.roboflow_download(format = arg_dict.get("format", "coco"), yes = arg_dict.get("yes", False))
 	if dataset is None:
 		print("Failed to download dataset")
 		sys.exit(1)

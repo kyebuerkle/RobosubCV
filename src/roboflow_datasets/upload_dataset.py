@@ -6,12 +6,11 @@
 #	NOTE: this process OVERWRITES the project in roboflow. make sure to adjust at least the version
 
 import sys
-from dataset_module import roboflow_upload, robo_arg_parse
+from dataset_module import robo_arg_parse
+from dataset_config import Config
 
 if __name__ == "__main__":
-	config = robo_arg_parse()
-	if config is None:
-		print("Failed to configure arguments")
-		sys.exit(1)
+	arg_dict= robo_arg_parse()
+	config = Config(arg_dict)
 	
-	roboflow_upload(config)
+	config.roboflow_upload(config)
