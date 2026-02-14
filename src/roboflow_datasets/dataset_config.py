@@ -5,7 +5,7 @@ import roboflow
 import shutil
 import os
 import json
-from dataset_module import roboflow_login
+from .dataset_module import roboflow_login
 
 class Config:
 	#	Roboflow config settings
@@ -19,20 +19,27 @@ class Config:
 	api_key = None
 
 	"""--------Private------------"""
-	def __init__(self, args = None):
+	def __init__(self, args = None, **kwargs):
 		"""
 		Constructor method
 		
 		:params args: dict of arguments to configure
+		:params kwarg: argument to configure (same as dict)
 		"""
-		if args:
-			if "path" in args:
-				self.path = args.get("path")
-			elif "config_path" in args:
-				self.path = args.get("config_path")
+		params = {}
+		params.update(kwargs)
+		if args is not None:
+			params.update(args)
+
+		if params:
+			if "path" in params:
+				self.path = params.get("path")
+			elif "config_path" in params:
+				self.path = params.get("config_path")
 			
 			self.__load_file()
-			self.config_dict(args)
+			self.config_dict(params)
+			self.save_file()
 		else:
 			self.__load_file()
 
@@ -75,7 +82,7 @@ class Config:
 
 		:returns str: The path to the dataset
 		"""
-		return os.path.abspath(os.path.join(self.dataset_dir, f"{self.workspace}-{self.project}-v{self.version}"))
+		return os.path.abspath(os.path.join(self.dataset_dir, f"{self.project}-v{self.version}"))
 		
 	def to_dict(self):
 		"""
@@ -96,9 +103,6 @@ class Config:
 		"""
 		Saves the current Config to .json file
 		"""
-		if not os.path.exists(self.path):
-			return False
-		
 		save_dict = self.to_dict()
 		save_dict.pop("key")
 		with open(self.path, "w") as f:
