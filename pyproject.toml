@@ -16,8 +16,6 @@ ultralytics = "^8.4.8"
 torch = { version = "*", optional = true }
 torchvision = { version = "*", optional = true }
 torchaudio = { version = "*", optional = true }
-pytest = "^9.0.2"
-argparse = "^1.4.0"
 
 [build-system]
 requires = ["poetry-core"]
