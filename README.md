@@ -17,8 +17,10 @@ Everytime you use this repo:
 
 Setup the repository on your personal computer by using 
 ```
-git clone [ssh key]
+git clone [key]
 ```
+[key] is found in [GitHub](https://github.com/kyebuerkle/RobosubCV) -> Code -> Code (Green button)
+Select either HTTPS or SSH, depending on your method of authentication.
 
 get feature branches by doing
 ```
@@ -53,3 +55,6 @@ poetry run py script.py
 poetry run ./app.exe
 ```
 Go to: https://python-poetry.org/docs/basic-usage/ to install and read through simple poetry commands.
+
+To install poetry run: `pipx install poetry` or `pip install poetry`
+(pipx is prefered as it isolates the poetry environment from other dependencies you have installed)

@@ -12,6 +12,10 @@ python = "^3.12"
 opencv-python = "^4.13.0.90"
 pandas = "^3.0.0"
 roboflow = "^1.2.13"
+ultralytics = "^8.4.8"
+torch = { version = "*", optional = true }
+torchvision = { version = "*", optional = true }
+torchaudio = { version = "*", optional = true }
 
 [build-system]
 requires = ["poetry-core"]
