@@ -5,8 +5,7 @@
 
 import sys
 import os
-from dataset_config import Config
-from dataset_module import robo_arg_parse
+from roboflow_datasets import Config, robo_arg_parse
 
 # --------- Main Function ----------
 if __name__ == "__main__":

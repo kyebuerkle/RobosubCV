@@ -5,11 +5,11 @@ import roboflow
 import shutil
 import os
 import json
-from .dataset_module import roboflow_login
+from roboflow_datasets import roboflow_login
 
 class Config:
 	#	Roboflow config settings
-	path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "roboflow_config.json")
+	path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../configuration.json"))
 	workspace  = ""
 	project = ""
 	version = 1
@@ -17,6 +17,7 @@ class Config:
 							   f"{os.path.dirname(os.path.abspath(__file__))}" \
 							   f"/../../data")
 	api_key = None
+	save_dir = ""
 
 	"""--------Private------------"""
 	def __init__(self, args = None, **kwargs):
@@ -95,8 +96,9 @@ class Config:
 				"workspace" : self.workspace,
 				"project" : self.project,
 				"version" : self.version,
+				"save" : self.save_dir,
 				"key" : self.api_key
-			}		
+			}	
 		return ret
 	
 	def save_file(self):
@@ -135,6 +137,8 @@ class Config:
 				self.api_key = val
 			elif (key == "directory"):
 				self.dataset_dir = val
+			elif (key == "save_dir" or key == "save_path" or key == "save"):
+				self.save_dir = val
 
 		if (self.workspace is None) or (self.workspace == ""):
 			return False
@@ -145,6 +149,8 @@ class Config:
 		if (not os.path.exists(self.dataset_dir)):
 			return False
 		if (not os.path.exists(self.path)):
+			return False
+		if (self.save_dir == "" or self.save_dir is None):
 			return False
 
 		return True
