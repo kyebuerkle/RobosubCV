@@ -33,6 +33,18 @@ Or instead use `-w` for the workspace, `-p` for the project and `-v` for the ver
 > ![WARNING]
 > this will overwrite your roboflow data, use with caution
 
+###		Roboflow Login
+
+run this command to login to roboflow
+
+```
+poetry run python roboflow_login.py
+```
+
+This will take you through some steps to log into roboflow, this will be saved in the environment so that you don't need an API key.
+
+On success it will print: `Successful Login!` and then attempt to print your default workspace, use this to verify that it is Your login. (this doesn't matter if it can't print as long as you have a URL for training)
+
 ##		Tests
 
 Roboflow upload and download won't be using 'unit tests', instead they will be tested through scripts since they require human input.

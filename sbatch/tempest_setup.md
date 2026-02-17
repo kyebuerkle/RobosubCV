@@ -57,6 +57,17 @@ Use `conda deactivate` to exit the environment.
 
 This environment is used in the (slurm) sbatch scripts when we send jobs to the Tempest queue. 
 
+###      Roboflow
+
+OPTIONAL: you can log into roboflow so you don't need an API Key
+
+1. be in your environment: `source activate Training`
+2. run: `poetry run python src/roboflow_datasets/roboflow_login.py`
+3. Follow the instructions to authenticate your login
+   1. read the README.md to understand usage
+
+Now you can delete the `ROBOFLOW_API` in the train.sbatch script (or just leave it, the script checks)
+
 ##		Validate
 
 After setting up Tempest with the [Repository](../README.md) cloned, there are a couple validation scripts. These validate that the environment is set up correctly, that the scripts can run in Tempest jobs, and that the team can get a working YOLO model.

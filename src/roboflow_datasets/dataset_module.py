@@ -3,7 +3,11 @@
 #	brief: module for the dataset library
 #		This library manages all the Roboflow functionality
 #		Uploading and Downloading
+#	TODO: It is a little stupid to put all my vars in a dictionary
+#		I should make it into a Config class, that way it has functions
+#		relating to it (but I'll do this after designing the minimum model)
 
+import argparse
 import roboflow
 import json
 import os
@@ -22,7 +26,12 @@ def save_json(**dict):
 	if not dict.get("config_path"):
 		print(f"Failed to save json file with config: {dict}")
 		return
+	
 	with open(dict.get("config_path"), "w") as f:
+		#	list of values to NOT save 
+		for k in ["config_path", "key", "yes", "format", "verbose"]:	
+			if k in dict:
+				dict.pop(k)
 		json.dump(dict, f, indent = 2)
 
 #	@brief: logs into roboflow with api, or user
@@ -118,8 +127,8 @@ def roboflow_download(config):
 		print(f"Failed to download dataset from config file: {config.get("config_path", "no path")}\n{e}")
 		return False
 	#	saving new json config
-	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
-	save_json(**config_save)
+	#config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
+	save_json(**config)
 	return dataset
 
 #	@brief: uploads dataset to roboflow
@@ -145,5 +154,40 @@ def roboflow_upload(config):
 		return
 	
 	#	saving new json config
-	config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version")}
-	save_json(**config_save)
+	#config_save = {k: config.get(k) for k in ("directory", "workspace", "project", "version", "config_path")}
+	save_json(**config)
+
+#	@brief: argument parser for anything roboflow related
+#	@return: config dictionary, nOne if failed
+#	NOTE: I used this in 3 scripts so it belonged as a funciton
+def robo_arg_parse(config_path = CONFIG_PATH):
+	parser = argparse.ArgumentParser(
+		prog = "download_dataset.py",
+		description = "downloads a dataset from roboflow",
+		argument_default = argparse.SUPPRESS
+		)
+	
+	parser.add_argument('-u', "--url", help = "Input the URL of the roboflow project")
+	parser.add_argument('-d', "--directory", help = "output directory")
+	parser.add_argument('-w', "--workspace", help = "roboflow workspace")
+	parser.add_argument('-p', "--project", help = "Project ID from rboflow")
+	parser.add_argument('-v', "--version", help = "versions of project, default 1", type=int)
+	parser.add_argument('-k', "--key", help = "api key for Roboflow login")
+	parser.add_argument('-f', "--format", help = "model format of images")
+	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
+	parser.add_argument('-s', "--save", help="save directory for the training model")
+	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
+	args = parser.parse_args()
+	arg_dict = vars(args)
+
+	#	deletes key if nothing was done to it
+	key_temp = arg_dict.get("key", None)
+	if (not key_temp is None) and (key_temp == "[API_KEY]"):
+		arg_dict.pop("key")
+
+	config = config_dict(config_path, **arg_dict)
+	if config is None:
+		print("Failed to configure arguments")
+		return None
+	
+	return config
