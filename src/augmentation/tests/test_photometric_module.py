@@ -1,5 +1,6 @@
 #	@file: test_photometric_module.py
 #	@brief: Spec tests that relate to the photometric augmentations
+#	If you use the --save argument, it will save all the images in this test
 
 import pytest
 import cv2
@@ -85,10 +86,10 @@ def assert_exposure_val(image1, image2, expected_exposure, percent_error = 0.05)
 	assert get_mean_percent_error(expected_exp, compare_exp) <= percent_error
 
 @pytest.mark.parametrize("sat_amount", [0.5, 1.0, 1.5, 0, -0.5])
-def test_saturation_various_amounts(tmp_image, sat_amount):
+def test_saturation_various_amounts(tmp_image, output_dir, sat_amount):
 	"""Test saturation function with different amounts"""
 	
-	output_image = tmp_image.parent / f"output_{str(sat_amount)}_sat.png"
+	output_image = output_dir / f"output_{str(sat_amount)}_sat.png"
 
 	out_str = change_saturation(tmp_image, output_image, sat_amount)
 	assert str(out_str) == str(output_image)
@@ -96,10 +97,10 @@ def test_saturation_various_amounts(tmp_image, sat_amount):
 	assert_saturation_val(tmp_image, output_image, sat_amount, 0.05)
 
 @pytest.mark.parametrize("exp_amount", [0.5, 1.0, 1.5, 0, -0.5])
-def test_exposure_various_amounts(tmp_image, exp_amount):
+def test_exposure_various_amounts(tmp_image, output_dir, exp_amount):
 	"""Test exposure function with different amounts"""
 	
-	output_image = tmp_image.parent / f"output_{str(exp_amount)}_exp.png"
+	output_image = output_dir / f"output_{str(exp_amount)}_exp.png"
 
 	out_str = change_exposure(tmp_image, output_image, exp_amount)
 	assert str(out_str) == str(output_image)

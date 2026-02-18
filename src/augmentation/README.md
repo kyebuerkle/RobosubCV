@@ -9,3 +9,6 @@ Image Augmentaion Subsystem. This system augments the training and validation im
 ##		Tests
 
 run `poetry run pytest` for all the unit tests of geometric and photometric augmentations
+use `--help` argument to see other options
+
+`--save` saves images used in test

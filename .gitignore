@@ -16,6 +16,8 @@ sbatch/stream-out/*
 !**/tests/test_image.png
 !**/tests/test_image.jpg
 !**/tests/test_image.jpeg
+**/tests/output
+**/tests/outputs
 
 # 	Builds
 **/build/
