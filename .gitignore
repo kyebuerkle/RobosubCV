@@ -9,6 +9,14 @@ results/*
 sbatch/stream-out/*
 !sbatch/stream-out/README.md
 
+#	test images
+**/tests/*.png
+**/tests/*.jpg
+**/tests/*.jpeg
+!**/tests/test_image.png
+!**/tests/test_image.jpg
+!**/tests/test_image.jpeg
+
 # 	Builds
 **/build/
 **/__pycache__/
