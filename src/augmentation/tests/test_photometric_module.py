@@ -7,8 +7,6 @@ import numpy as np
 from pathlib import Path
 from augmentation.photometric_module import change_saturation, change_exposure
 
-
-
 @pytest.fixture(params=["random", 
 						Path(__file__).resolve().parent / "test_image.jpg"])
 def tmp_image(request, tmp_path):
@@ -49,6 +47,13 @@ def saturation_of_image(image):
 
 	return image_hsv[:, :, 1]
 
+def exposure_of_image(image):
+	"""returns the list of exposure / brightness values"""
+	image_cv = cv2.imread(str(image))
+	image_hsv = cv2.cvtColor(image_cv, cv2.COLOR_BGR2HSV)
+
+	return image_hsv[:, :, 2]
+
 def assert_saturation_val(image1, image2, expected_saturation, percent_error = 0.05):
 	"""
 	assert statements that compare image1 with image2 and asserts the expecetd saturation
@@ -64,34 +69,39 @@ def assert_saturation_val(image1, image2, expected_saturation, percent_error = 0
 	expected_sat = np.clip(normal_sat * expected_saturation, 0, 255)
 	assert get_mean_percent_error(expected_sat, compare_sat) <= percent_error
 
-def assert_hv_val(image1, image2, percent_error = 0.05):
+def assert_exposure_val(image1, image2, expected_exposure, percent_error = 0.05):
 	"""
-	asserts the Hue and Value values to be the same
-	(I realized that saturation is only one part that's different)
+	assert statements that compare image1 with image2 and asserts the expecetd exposure
+
+	percent error is the minimal required error allowed (this is caused from rounding)
 	"""
-	image1_cv = cv2.imread(str(image1))
-	image1_hsv = cv2.cvtColor(image1_cv, cv2.COLOR_BGR2HSV)
-	image2_cv = cv2.imread(str(image2))
-	image2_hsv = cv2.cvtColor(image2_cv, cv2.COLOR_BGR2HSV)
+	normal_exp = exposure_of_image(image1)
+	compare_exp = exposure_of_image(image2)
 
-	image1_h = image1_hsv[:, :, 0]
-	image1_v = image1_hsv[:, :, 2]
-	image2_h = image2_hsv[:, :, 0]
-	image2_v = image2_hsv[:, :, 2]
+	#	Images must be the same size
+	assert normal_exp.shape == compare_exp.shape
 
-	assert image1_hsv.shape == image2_hsv.shape
-	assert get_mean_percent_error(image1_h, image2_h) <= percent_error
-	assert get_mean_percent_error(image1_v, image2_v) <= percent_error
+	expected_exp = np.clip(normal_exp * expected_exposure, 0, 255)
+	assert get_mean_percent_error(expected_exp, compare_exp) <= percent_error
 
 @pytest.mark.parametrize("sat_amount", [0.5, 1.0, 1.5, 0, -0.5])
 def test_saturation_various_amounts(tmp_image, sat_amount):
 	"""Test saturation function with different amounts"""
 	
-	output_image = tmp_image.parent / f"output_{str(sat_amount)}.png"
+	output_image = tmp_image.parent / f"output_{str(sat_amount)}_sat.png"
 
 	out_str = change_saturation(tmp_image, output_image, sat_amount)
 	assert str(out_str) == str(output_image)
 
 	assert_saturation_val(tmp_image, output_image, sat_amount, 0.05)
-	# make sure the rest of the image stays the same
-	#assert_hv_val(tmp_image, output_image, 0.05)
+
+@pytest.mark.parametrize("exp_amount", [0.5, 1.0, 1.5, 0, -0.5])
+def test_exposure_various_amounts(tmp_image, exp_amount):
+	"""Test exposure function with different amounts"""
+	
+	output_image = tmp_image.parent / f"output_{str(exp_amount)}_exp.png"
+
+	out_str = change_exposure(tmp_image, output_image, exp_amount)
+	assert str(out_str) == str(output_image)
+
+	assert_exposure_val(tmp_image, output_image, exp_amount, 0.05)
