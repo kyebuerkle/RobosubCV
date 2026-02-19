@@ -12,6 +12,18 @@ import itertools
 import time
 from contextlib import contextmanager
 
+class Animations:
+    """
+    Const Class Animations, has animation list attributes that you can add to loading
+
+    Eg:
+    with loading("fight", Animations.coen_fight)
+    """
+    coen_fight = [' D     C ', '-D     C ', '>D     C ','-D>    C ',' D->   C ', ' D  -> C ', ' D    -C ',
+                                ' D    -C ',' D    -C ',' D    -c ',' D     _ ',' D     _ ',' D     _ ', ' D     c ', ' D     C ',
+                                ' D     C-',' D     C<',' D    <C-',' D:  <-C ', ' D|<-  C ',' D|-   C ',' D|-   C ',
+                                ' D|-   C ',' D|_   C ',' D|_   C ', ' D:    C ',' D     C ']
+
 def _spinner(text, stop_event, animation):
     for frame in itertools.cycle(animation):
         if stop_event.is_set():

@@ -1,1 +1,1 @@
-from .loading_animation import loading
+from .loading_animation import loading, Animations
