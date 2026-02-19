@@ -82,13 +82,13 @@ Examples:
 
 def main(parser, args):
 	# Verify input directory exists
-	input_path = Path(args.input_dir)
+	input_path = Path(args.input_dir).resolve()
 	if not input_path.exists():
 		parser.error(f"Input directory does not exist: {args.input_dir}")
 	if not input_path.is_dir():
 		parser.error(f"Input path is not a directory: {args.input_dir}")
 
-	output_path = Path(args.output_dir)
+	output_path = Path(args.output_dir).resolve()
 	if not output_path.exists():
 		if config.VERBOSE:
 			print(f"Making new dir {str(output_path)}")
