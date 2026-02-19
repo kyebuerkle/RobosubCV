@@ -8,7 +8,7 @@ import numpy as np
 from pathlib import Path
 from augmentation.photometric_module import change_saturation, change_exposure
 
-@pytest.fixture(params=["random", 
+@pytest.fixture(params=["random", "middle", 
 						Path(__file__).resolve().parent / "test_image.jpg"])
 def tmp_image(request, tmp_path):
 	"""
@@ -24,6 +24,11 @@ def tmp_image(request, tmp_path):
 	elif request.param == "one":
 		image_file = tmp_path / "tmp_one_image.png"
 		image = np.ones((100, 100, 3))
+		cv2.imwrite(str(image_file), image)
+		return image_file
+	elif request.param == "middle":
+		image_file = tmp_path / "tmp_mid_image.png"
+		image = np.full(shape = (100, 100, 3), fill_value = 127)
 		cv2.imwrite(str(image_file), image)
 		return image_file
 	else:

@@ -258,7 +258,11 @@ def _yolo_dataset_generic(
 	new_yaml = None
 	if new_dataset:
 		new_dataset_path = Path(new_dataset)
-		new_dataset_path.mkdir(parents=True, exist_ok=True)
+		if (new_dataset_path.exists() and any(new_dataset_path.iterdir())):
+			if config.VERBOSE:
+				print("This directory already exists with stuff, overwriting...")
+			shutil.rmtree(new_dataset_path)
+		new_dataset_path.mkdir(parents=True)
 		new_yaml = {}
 		
 	splits = ['train', 'val', 'test']

@@ -17,7 +17,7 @@ def _do_yolo_augmentations(args, input_path, output_path):
 			input_path,
 			output_path,
 			args.exposure,
-			"{file}_exp{ind}.{ext}"
+			"{file}_exp{ind}{ext}"
 			)
 	
 	if args.saturation and args.exposure:
@@ -27,7 +27,7 @@ def _do_yolo_augmentations(args, input_path, output_path):
 			output_path,
 			output_path,
 			args.saturation,
-			"{file}sat{ind}.{ext}"
+			"{file}sat{ind}{ext}"
 			)
 	elif args.saturation:
 		if config.VERBOSE:
@@ -36,7 +36,7 @@ def _do_yolo_augmentations(args, input_path, output_path):
 			input_path,
 			output_path,
 			args.saturation,
-			"{file}_sat{ind}.{ext}"
+			"{file}_sat{ind}{ext}"
 			)
 
 def main(parser, args):
