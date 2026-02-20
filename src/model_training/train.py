@@ -8,7 +8,7 @@ from roboflow_datasets import robo_arg_parse, Config
 def main(arg_dict, **kwargs):
 	arg_dict.update(kwargs)
 	model_file = arg_dict.get("model", None)
-	if not model:
+	if not model_file:
 		print("No model selected to train")
 		return False
 	try:
@@ -50,7 +50,8 @@ def main(arg_dict, **kwargs):
 	return True
 
 if __name__ == "__main__":
-	if not main(robo_arg_parse(), model = "yolov8m.pt"):
+	ret = main(robo_arg_parse(), model = "yolov8m.pt")
+	if not ret:
 		print("\n"\
 			"!=======================!\n" \
 			"! Failed to train model !\n" \
