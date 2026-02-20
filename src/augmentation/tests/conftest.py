@@ -9,12 +9,16 @@ def pytest_addoption(parser):
 		default=False,
 		help="Save test output images to permanent location"
 	)
-	parser.addoption(
-        "--dataset",
-        action="store",
-        default=None,
-        help="Root directory of a dataset"
-    )
+	try:
+		parser.addoption(
+			"--dataset",
+			action="store",
+			default=None,
+			help="Root directory of a dataset"
+		)
+	except ValueError:
+		#	already passed
+		pass
 
 def pytest_sessionstart(session):
 	if session.config.getoption("--save"):
@@ -41,14 +45,14 @@ def output_dir(request, tmp_path):
 
 @pytest.fixture(scope="session")
 def dataset_root(request):
-    root = request.config.getoption("--dataset")
+	root = request.config.getoption("--dataset")
 
-    if root is None:
-        return None
+	if root is None:
+		return None
 
-    path = Path(root).resolve()
+	path = Path(root).resolve()
 
-    if not path.exists():
-        pytest.fail(f"Dataset root does not exist: {path}")
+	if not path.exists():
+		pytest.fail(f"Dataset root does not exist: {path}")
 
-    return path
+	return path
