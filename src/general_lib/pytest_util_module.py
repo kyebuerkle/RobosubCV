@@ -6,7 +6,6 @@ from PIL import Image
 import pytest
 
 SPLITS = ["train", "valid", "test"]
-
 def validate_yolov8_dataset(dataset_root: Path):
 	for split in SPLITS:
 		split_dir = dataset_root / split

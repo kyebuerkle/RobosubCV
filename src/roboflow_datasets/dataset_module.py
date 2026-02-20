@@ -13,6 +13,8 @@ import json
 import os
 import shutil
 
+from general_lib import parse_float_list
+
 #	@brief: logs into roboflow with api, or user
 #	@param: api_key, when none login with user
 #	@return: roboflow.Roboflow -> rf for roboflow login
@@ -48,6 +50,8 @@ def robo_arg_parse():
 	parser.add_argument('-f', "--format", help = "model format of images")
 	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
 	parser.add_argument('-s', "--save", help="save directory for the training model")
+	parser.add_argument('-sat', "--saturation", help="saturation augmentation values, comma seperated eg: 0.5,1,1.75")
+	parser.add_argument('-exp', "--exposure", help="exposure augmentation values, comma seperated eg: 0.5,1,1.75")
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 	arg_dict = vars(args)
@@ -56,5 +60,11 @@ def robo_arg_parse():
 	key_temp = arg_dict.get("key", None)
 	if (not key_temp is None) and (key_temp == "[API_KEY]"):
 		arg_dict.pop("key")
+
+	#	parsing lists
+	for key in ["exposure", "saturation"]:
+		if key in arg_dict:
+			val = arg_dict.get(key)
+			arg_dict[key] = list(parse_float_list(val))
 
 	return arg_dict

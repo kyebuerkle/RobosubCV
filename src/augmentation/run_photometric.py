@@ -4,16 +4,9 @@
 import argparse
 from pathlib import Path
 
-from general_lib import loading, Animations
+from general_lib import loading, Animations, parse_float_list
 from augmentation import dir_change_exposure, dir_change_saturation
 import augmentation.config as config
-
-def parse_float_list(value):
-	"""Parse comma-separated list of floats"""
-	try:
-		return [float(x.strip()) for x in value.split(',')]
-	except ValueError:
-		raise argparse.ArgumentTypeError(f"Invalid float list: {value}")
 
 def get_args():
 	parser = argparse.ArgumentParser(

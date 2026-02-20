@@ -23,6 +23,7 @@ sbatch/stream-out/*
 **/build/
 **/__pycache__/
 **/.pytest_cache
+**/dep_*
 
 #	Object & Library Files
 *.o

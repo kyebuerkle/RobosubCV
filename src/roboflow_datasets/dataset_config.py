@@ -1,11 +1,14 @@
 #	@file: dataset_config.py
 #	@brief: this houses the Config class for the entire RobosubCV project
+#	TODO: refactor this for the general_lib... that way I can add multiple dependencies
 
 import roboflow
 import shutil
 import os
 import json
+
 from roboflow_datasets import roboflow_login
+from augmentation import yolo_change_exposure, yolo_change_saturation
 
 class Config:
 	#	Roboflow config settings
@@ -18,6 +21,10 @@ class Config:
 							   f"/../../data")
 	api_key = None
 	save_dir = ""
+
+	#	Augmentation settings
+	saturation = []
+	exposure = []
 
 	"""--------Private------------"""
 	def __init__(self, args = None, **kwargs):
@@ -84,12 +91,34 @@ class Config:
 		:returns str: The path to the dataset
 		"""
 		return os.path.abspath(os.path.join(self.dataset_dir, f"{self.project}-v{self.version}"))
+	
+	def get_yaml(self):
+		"""
+		Returns the data.yaml file for training
+		"""
+		yaml = os.path.join(self.get_dataset(), "data.yaml")
+		if not os.path.exists(yaml):
+			return None
+		
+		return yaml
+	
+	def get_save_dir(self, new_save = None):
+		"""
+		Returns the save directory, None on fail
+		"""
+		if new_save:
+			self.save_dir = new_save
+
+		if not self.save_dir or self.save_dir == "":
+			return None
+		os.makedirs(self.save_dir, exist_ok = True)
+
+		return self.save_dir
 		
 	def to_dict(self):
 		"""
 		Converts current Config to a dictionary		
 		"""
-		#	TODO: check if any keys are the same
 		ret = {
 				"directory" : self.dataset_dir,
 				"dataset" : self.get_dataset(),
@@ -97,7 +126,9 @@ class Config:
 				"project" : self.project,
 				"version" : self.version,
 				"save" : self.save_dir,
-				"key" : self.api_key
+				"key" : self.api_key,
+				"saturation" : self.saturation,
+				"exposure" : self.exposure
 			}	
 		return ret
 	
@@ -139,6 +170,10 @@ class Config:
 				self.dataset_dir = val
 			elif (key == "save_dir" or key == "save_path" or key == "save"):
 				self.save_dir = val
+			elif (key == "saturation"):
+				self.saturation = val
+			elif (key == "exposure"):
+				self.exposure = val
 
 		if (self.workspace is None) or (self.workspace == ""):
 			return False
@@ -210,3 +245,34 @@ class Config:
 		except Exception as e:
 			print(f"Failed to upload dateset from config file: {self.path}")
 			return
+		
+	def run_augmentations(self, **kwargs):
+		"""
+		Runs the augmentations in the Config, note adds 1 to the version for new dataset
+
+		:return dataset: dataset path to train, if no augmentations then it stays as get_dataset()
+		"""
+		if "saturation" in kwargs:
+			self.saturation = kwargs.get("saturation")
+		elif "exposure" in kwargs:
+			self.saturation = kwargs.get("exposure")
+		
+
+		input_dataset = self.get_dataset()
+		self.version += 1
+		augmented_dataset = self.get_dataset()
+
+		if isinstance(self.saturation, list) and self.saturation:
+			yolo_change_saturation(
+				input_dataset, augmented_dataset,
+				self.saturation, "{file}_sat{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+		if isinstance(self.exposure, list) and self.exposure:
+			yolo_change_exposure(
+				input_dataset, augmented_dataset,
+				self.exposure, "{file}_exp{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+		
+		return input_dataset
