@@ -82,13 +82,13 @@ def test_yolo_dataset_augmentations(tmp_dataset, output_dir, test_args):
 			tmp_dataset, output_dataset,
 			AUGMENT_VALUES, "{file}_exp{ind}{ext}"
 			)
-		augment_num = 3
+		augment_num = len(AUGMENT_VALUES)
 	elif test_args == "saturation":
 		yolo_change_saturation(
 			tmp_dataset, output_dataset,
 			AUGMENT_VALUES, "{file}_sat{ind}{ext}"
 			)
-		augment_num = 3
+		augment_num = len(AUGMENT_VALUES)
 	elif test_args == "both":
 		yolo_change_exposure(
 			tmp_dataset, output_dataset,
@@ -98,7 +98,7 @@ def test_yolo_dataset_augmentations(tmp_dataset, output_dir, test_args):
 			output_dataset, output_dataset,
 			AUGMENT_VALUES, "{file}_sat{ind}{ext}"
 			)
-		augment_num = 9
+		augment_num = len(AUGMENT_VALUES) * len(AUGMENT_VALUES)
 		
 	validate_yolov8_dataset(output_dataset)
 	for split in SPLIT_DIRS:
