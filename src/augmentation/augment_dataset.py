@@ -8,7 +8,8 @@ import yaml
 import json
 import shutil
 
-from augmentation import change_exposure, change_saturation
+from .photometric_module import change_exposure, change_saturation
+from .geometric_module import change_scale
 import augmentation.config as config
 
 #	this is cool, its a function that you input another function as a parameter, it overrides it so that it loops through
@@ -174,6 +175,23 @@ def dir_change_saturation(input_dir, output_dir, saturation_list: List[float], n
 	_dir_change_generic(
 		input_dir, output_dir, saturation_list,
 		change_saturation, name_conv
+		)
+
+def dir_change_scale(input_dir, output_dir, saturation_list: List[float], name_conv: str = "", origin = None):
+	"""
+	Apply scale changes to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param saturation_list: list of scale value percentages 0.0 -> 2.0
+	:type saturation_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = scale value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	partial_change_scale = lambda img, out, amount: change_scale(img, out, amount, origin)
+	_dir_change_generic(
+		input_dir, output_dir, saturation_list,
+		partial_change_scale, name_conv
 		)
 
 def yolo_change_exposure(input_dataset, output_dataset, exposure_list: List[float], name_conv: str = ""):

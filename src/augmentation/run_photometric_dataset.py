@@ -6,7 +6,7 @@ from pathlib import Path
 from general_lib import loading, Animations
 import augmentation.config as config
 from augmentation import yolo_change_exposure, yolo_change_saturation
-from augmentation.run_photometric import get_args
+from augmentation._shared_module import get_args
 
 def _do_yolo_augmentations(args, input_path, output_path):
 	"""this is just to simplify main, only use case is there"""
