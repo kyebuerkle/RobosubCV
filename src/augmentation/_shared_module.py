@@ -2,6 +2,7 @@
 #	@brief: shared functions for geometric and phototmetric modules
 
 import argparse
+from pathlib import Path
 import augmentation.config as config
 from general_lib import parse_float_list
 
@@ -60,6 +61,11 @@ Examples:
 		action='store_true',
 		help='Enable verbose output for debugging'
 		)
+	parser.add_argument(
+		'-vv', "--verbose-verbose",
+		action='store_true',
+		help="Enable even more verbose output for debugging"
+		)
 	
 	args = parser.parse_args()
 	
@@ -73,8 +79,12 @@ Examples:
 
 	if args.resize_origin and len(args.resize_origin) != 2:
 		parser.error("There needs to be 2 values for origin: x,y")
-	
+
 	# Verbose output
+	if args.verbose_verbose:
+		args.verbose = True
+		config.VVERBOSE = True
+	
 	if args.verbose:
 		config.VERBOSE = True
 		print(f"Input directory: {args.input_dir}")
@@ -88,4 +98,17 @@ Examples:
 		if args.resize_origin:
 			print(f"Origin point: {args.resize_origin}")
 	
-	return (parser, args)
+	# Verify input directory exists
+	input_path = Path(args.input_dir).resolve()
+	if not input_path.exists():
+		parser.error(f"Input directory does not exist: {args.input_dir}")
+	if not input_path.is_dir():
+		parser.error(f"Input path is not a directory: {args.input_dir}")
+	
+	output_path = Path(args.output_dir).resolve()
+	if not output_path.exists():
+		if config.VERBOSE:
+			print(f"Making new dir {str(output_path)}")
+		output_path.mkdir(parents=True)
+	
+	return args

@@ -1,57 +1,53 @@
-#	@file: run_photometric_dataset.py
+#	@file: run_augmentation_dataset.py
 #	@brief: script to run dataset augmentation functions
 
 from pathlib import Path
 
 from general_lib import loading, Animations
 import augmentation.config as config
-from augmentation import yolo_change_exposure, yolo_change_saturation
+from augmentation import yolo_change_exposure, yolo_change_saturation, yolo_change_resize
 from augmentation._shared_module import get_args
 
 def _do_yolo_augmentations(args, input_path, output_path):
 	"""this is just to simplify main, only use case is there"""
 	if args.exposure:
 		if config.VERBOSE:
-			print(f"\nApplying exposure augmentation...")
+			print(f"\nApplying exposure augmentations: {args.exposure}")
 		yolo_change_exposure(
 			input_path,
 			output_path,
 			args.exposure,
 			"{file}_exp{ind}{ext}"
 			)
+		input_path = output_path
 	
-	if args.saturation and args.exposure:
+	if args.saturation:
 		if config.VERBOSE:
-			print(f"\nApplying saturation augmentation...")
-		yolo_change_saturation(
-			output_path,
-			output_path,
-			args.saturation,
-			"{file}sat{ind}{ext}"
-			)
-	elif args.saturation:
-		if config.VERBOSE:
-			print(f"\nApplying saturation augmentation...")
+			print(f"\nApplying saturation augmentations: {args.saturation}")
 		yolo_change_saturation(
 			input_path,
 			output_path,
 			args.saturation,
 			"{file}_sat{ind}{ext}"
 			)
+		input_path = output_path
 
-def main(parser, args):
+	if args.resize:
+		if config.VERBOSE:
+			print(f"\nApplying resize augmentation: {args.resize}")
+		yolo_change_resize(
+			input_path,
+			output_path,
+			args.resize,
+			"{file}_res{ind}{ext}"
+			)
+		input_path = output_path
+
+def main(args):
+	"""Main script"""
 	# Verify input directory exists
 	input_path = Path(args.input_dir).resolve()
-	if not input_path.exists():
-		parser.error(f"Input directory does not exist: {args.input_dir}")
-	if not input_path.is_dir():
-		parser.error(f"Input path is not a directory: {args.input_dir}")
-
 	output_path = Path(args.output_dir).resolve()
-	if not output_path.exists():
-		if config.VERBOSE:
-			print(f"Making new dir {str(output_path)}")
-		output_path.mkdir(parents=True)
 
 	#	determine if dataset is coco or yolov8
 	yaml_path = input_path / "data.yaml"
@@ -69,10 +65,10 @@ def main(parser, args):
 		print("Finished augmenting dataset!")
 
 if __name__ == "__main__":
-	out = get_args()
+	args = get_args()
 	if config.VERBOSE:
-		main(*out)
+		main(args)
 	else:
 		with loading("Augmenting ", Animations.coen_fight):
-			main(*out)
+			main(args)
 		

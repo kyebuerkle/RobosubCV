@@ -8,8 +8,8 @@ import numpy as np
 from pathlib import Path
 from augmentation.photometric_module import change_saturation, change_exposure
 
-@pytest.fixture(params=["random", "middle", 
-						Path(__file__).resolve().parent / "test_image.jpg"])
+@pytest.fixture(params=["random", "middle"])	# TODO: change this to the image directory in the assests folder, also this doesn't save every file
+						#Path(__file__).resolve().parent / "test_image.jpg"])
 def tmp_image(request, tmp_path):
 	"""
 	create temperary image of random values, or output real image path
