@@ -8,8 +8,34 @@ import numpy as np
 from pathlib import Path
 from augmentation.photometric_module import change_saturation, change_exposure
 
-@pytest.fixture(params=["random", "middle"])	# TODO: change this to the image directory in the assests folder, also this doesn't save every file
-						#Path(__file__).resolve().parent / "test_image.jpg"])
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+def pytest_generate_tests(metafunc):
+	"""
+	If a test uses `tmp_image`, expand any directory entries in the fixture's
+	params into individual image file paths at collection time.
+	"""
+	if "tmp_image" not in metafunc.fixturenames:
+		return
+
+	raw_params = ["random", "middle"]  # keep your base params here
+
+	# Add your asset directory — swap this path for your real one
+	asset_dir_str = (
+        metafunc.config.getoption("--asset-dir", default=None)
+        or metafunc.config.getini("asset_dir")
+    	)
+	asset_dir = Path(asset_dir_str).resolve()
+	if asset_dir.is_dir():
+		image_files = sorted(
+			p for p in asset_dir.iterdir()
+			if p.suffix.lower() in IMAGE_EXTENSIONS
+		)
+		raw_params.extend(image_files)  # each file becomes its own param
+
+	metafunc.parametrize("tmp_image", raw_params, indirect=True)
+
+@pytest.fixture
 def tmp_image(request, tmp_path):
 	"""
 	create temperary image of random values, or output real image path
@@ -65,6 +91,7 @@ def assert_saturation_val(image1, image2, expected_saturation, percent_error = 0
 	assert statements that compare image1 with image2 and asserts the expecetd saturation
 
 	percent error is the minimal required error allowed (this is caused from rounding)
+	:return percent_error: calculated percent error
 	"""
 	normal_sat = saturation_of_image(image1)
 	compare_sat = saturation_of_image(image2)
@@ -73,13 +100,17 @@ def assert_saturation_val(image1, image2, expected_saturation, percent_error = 0
 	assert normal_sat.shape == compare_sat.shape
 
 	expected_sat = np.clip(normal_sat * expected_saturation, 0, 255)
-	assert get_mean_percent_error(expected_sat, compare_sat) <= percent_error
+	calc_percent_error = get_mean_percent_error(expected_sat, compare_sat)
+	assert calc_percent_error <= percent_error
+
+	return calc_percent_error
 
 def assert_exposure_val(image1, image2, expected_exposure, percent_error = 0.05):
 	"""
 	assert statements that compare image1 with image2 and asserts the expecetd exposure
 
 	percent error is the minimal required error allowed (this is caused from rounding)
+	:return percent_error: calculated percent error
 	"""
 	normal_exp = exposure_of_image(image1)
 	compare_exp = exposure_of_image(image2)
@@ -88,26 +119,34 @@ def assert_exposure_val(image1, image2, expected_exposure, percent_error = 0.05)
 	assert normal_exp.shape == compare_exp.shape
 
 	expected_exp = np.clip(normal_exp * expected_exposure, 0, 255)
-	assert get_mean_percent_error(expected_exp, compare_exp) <= percent_error
+	calc_percent_error = get_mean_percent_error(expected_exp, compare_exp)
+	assert calc_percent_error <= percent_error
 
-@pytest.mark.parametrize("sat_amount", [0.5, 1.0, 1.5, 0, -0.5])
-def test_saturation_various_amounts(tmp_image, output_dir, sat_amount):
+	return calc_percent_error
+
+@pytest.mark.parametrize("sat_amount", [0.7, 1, 1.3, 2, 0, -0.5])
+def test_saturation_various_amounts(tmp_image, output_dir, sat_amount, error_csv_writer):
 	"""Test saturation function with different amounts"""
 	
-	output_image = output_dir / f"output_{str(sat_amount)}_sat.png"
+	image_name = Path(tmp_image)
+	output_image = output_dir / f"{image_name.stem}_{sat_amount}_sat.png"
 
 	out_str = change_saturation(tmp_image, output_image, sat_amount)
 	assert str(out_str) == str(output_image)
 
-	assert_saturation_val(tmp_image, output_image, sat_amount, 0.05)
+	percent_error = assert_saturation_val(tmp_image, output_image, sat_amount, 0.05)
+	error_csv_writer(output_image.name, "saturation", sat_amount, percent_error)
 
-@pytest.mark.parametrize("exp_amount", [0.5, 1.0, 1.5, 0, -0.5])
-def test_exposure_various_amounts(tmp_image, output_dir, exp_amount):
+
+@pytest.mark.parametrize("exp_amount", [0.615, 1, 1.385, 2, 0, -0.5])
+def test_exposure_various_amounts(tmp_image, output_dir, exp_amount, error_csv_writer):
 	"""Test exposure function with different amounts"""
 	
-	output_image = output_dir / f"output_{str(exp_amount)}_exp.png"
+	image_name = Path(tmp_image)
+	output_image = output_dir / f"{image_name.stem}_{exp_amount}_exp.png"
 
 	out_str = change_exposure(tmp_image, output_image, exp_amount)
 	assert str(out_str) == str(output_image)
 
-	assert_exposure_val(tmp_image, output_image, exp_amount, 0.05)
+	percent_error = assert_exposure_val(tmp_image, output_image, exp_amount, 0.05)
+	error_csv_writer(output_image.name, "exposure", exp_amount, percent_error)

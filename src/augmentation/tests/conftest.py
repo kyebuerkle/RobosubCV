@@ -1,5 +1,6 @@
 import pytest
 import shutil
+import csv
 from pathlib import Path
 
 def pytest_addoption(parser):
@@ -9,12 +10,29 @@ def pytest_addoption(parser):
 		default=False,
 		help="Save test output images to permanent location"
 	)
+	parser.addoption(
+		"--csv",
+		action="store",
+		default=None,
+		help="Path to save % error CSV results (e.g. results/errors.csv)",
+	)
 	try:
 		parser.addoption(
 			"--dataset",
 			action="store",
 			default=None,
 			help="Root directory of a dataset"
+		)
+		parser.addoption(
+			"--asset-dir",
+			action="store",
+			default=None,
+			help="Path to directory of test images (overrides pytest.ini asset_dir)",
+		)
+		parser.addini(
+			"asset_dir",
+			help="Default path to directory of test images",
+			default=None,
 		)
 	except ValueError:
 		#	already passed
@@ -26,6 +44,37 @@ def pytest_sessionstart(session):
 		if save_dir.exists():
 			print("Cleaning output file for tests")
 			shutil.rmtree(save_dir)
+	
+@pytest.fixture(scope="session")
+def error_csv_writer(request):
+	"""
+	Session-scoped fixture that opens a CSV file for writing arbitrary rows.
+	Yields a callable: log_error(*args) — writes each arg as a column in order.
+	Floats are formatted to 6 decimal places.
+	If --error-csv is not passed, logging is a no-op.
+	"""
+	csv_path_str = request.config.getoption("--csv", default=None)
+
+	if csv_path_str is None:
+		yield lambda *args: None
+		return
+
+	csv_path = Path(csv_path_str)
+	csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+	def format_value(v):
+		if isinstance(v, float):
+			return f"{v:.6f}"
+		return v
+
+	with open(csv_path, "w", newline="") as f:
+		writer = csv.writer(f)
+
+		def log_error(*args):
+			writer.writerow([format_value(a) for a in args])
+			f.flush()
+
+		yield log_error
 
 @pytest.fixture
 def output_dir(request, tmp_path):
