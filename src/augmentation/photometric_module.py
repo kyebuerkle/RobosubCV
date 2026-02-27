@@ -58,7 +58,6 @@ def change_saturation(image_file, out_file, saturation_amount: float):
 	:param saturation_amount: % change the saturation, >2 is clamped 
 	:type saturation_amount: float
 	"""		
-
 	image = cv2.imread(str(image_file))
 	if image is None:
 		raise FileNotFoundError(f"Could not read image: {image_file}")
@@ -68,10 +67,11 @@ def change_saturation(image_file, out_file, saturation_amount: float):
 		cv2.imwrite(str(out_file), image)
 		return out_file
 
-	hsv_img = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
-	hsv_img[:, :, 1] = np.clip(hsv_img[:, :, 1] * saturation_amount, 0, 255) 	# Modify only saturation channel
-	hsv_img = hsv_img.astype(np.uint8)
+	image_f32 = image.astype(np.float32) / 255.0
+	hsv_img = cv2.cvtColor(image_f32, cv2.COLOR_BGR2HSV)
+	hsv_img[:, :, 1] = np.clip(hsv_img[:, :, 1] * saturation_amount, 0.0, 1.0)
 	final_image = cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR)
+	final_image = np.clip(final_image * 255.0, 0, 255).astype(np.uint8)
 
 	cv2.imwrite(str(out_file), final_image)
 	return out_file
