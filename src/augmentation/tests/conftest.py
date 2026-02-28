@@ -1,6 +1,8 @@
 import pytest
 import shutil
 import csv
+import cv2
+import numpy as np
 from pathlib import Path
 
 def pytest_addoption(parser):
@@ -105,3 +107,61 @@ def dataset_root(request):
 		pytest.fail(f"Dataset root does not exist: {path}")
 
 	return path
+
+#--- Generate temporary images ---
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+
+def pytest_generate_tests(metafunc):
+	"""
+	If a test uses `tmp_image`, expand any directory entries in the fixture's
+	params into individual image file paths at collection time.
+	"""
+	if "tmp_image" not in metafunc.fixturenames:
+		return
+
+	raw_params = ["random", "middle"]  # keep your base params here
+
+	# Add your asset directory — swap this path for your real one
+	asset_dir_str = (
+        metafunc.config.getoption("--asset-dir", default=None)
+        or metafunc.config.getini("asset_dir")
+    	)
+	asset_dir = Path(asset_dir_str).resolve()
+	if asset_dir.is_dir():
+		image_files = sorted(
+			p for p in asset_dir.iterdir()
+			if p.suffix.lower() in IMAGE_EXTENSIONS
+			)
+		raw_params.extend(image_files)  # each file becomes its own param
+
+	metafunc.parametrize("tmp_image", raw_params, indirect=True)
+
+@pytest.fixture
+def tmp_image(request, tmp_path):
+	"""
+	create temperary image of random values, or output real image path
+
+	:return image path: image path
+	"""
+	if request.param == "random":
+		image_file = tmp_path / "tmp_rand_image.png"
+		image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+		cv2.imwrite(str(image_file), image)
+		return image_file
+	elif request.param == "one":
+		image_file = tmp_path / "tmp_one_image.png"
+		image = np.ones((100, 100, 3))
+		cv2.imwrite(str(image_file), image)
+		return image_file
+	elif request.param == "middle":
+		image_file = tmp_path / "tmp_mid_image.png"
+		image = np.full(shape = (100, 100, 3), fill_value = 127)
+		cv2.imwrite(str(image_file), image)
+		return image_file
+	else:
+		image_file = Path(request.param)
+		if (not image_file.exists()):
+			pytest.skip(f"Image not found: {str(image_file)}")
+		return image_file
+	

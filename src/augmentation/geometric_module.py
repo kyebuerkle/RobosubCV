@@ -48,6 +48,7 @@ def change_scale(image_file, out_file, scale_amount: float, origin: tuple[float,
 	cv2.imwrite(str(out_file), result)
 	return out_file
 
+# each line is: id x y w h
 def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, origin: tuple[float, float] | None = None):
 	"""
 	changes the scale of an image's txt file label
@@ -62,12 +63,12 @@ def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, orig
 	:type origin: tuple ( float, float )
 	"""
 	if isinstance(image_size, tuple) and len(image_size) == 2:
-		w, h = image_size
+		h, w = image_size
 	elif isinstance(image_size, str) or isinstance(image_size, Path):
 		img = cv2.imread(str(image_size))
 		h, w = img.shape[:2]
 	else:
-		print("Wrong parameter for image_size, use path or (width, height)")
+		print("Wrong parameter for image_size, use path or (height, width)")
 		return None
 	
 	ox, oy = origin if origin is not None else (w / 2.0, h / 2.0)
@@ -83,6 +84,8 @@ def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, orig
 		if not line.strip():
 			continue
 		parts = line.split()
+		if len(parts) != 5:
+			continue
 		class_id = parts[0]
 		cx, cy, bw, bh = map(float, parts[1:5])
 
@@ -91,10 +94,6 @@ def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, orig
 		cy_new = scale_amount * (cy - oy_n) + oy_n
 		bw_new = scale_amount * bw
 		bh_new = scale_amount * bh
-
-		# Drop boxes whose centre is fully outside the frame
-		if not (0.0 <= cx_new <= 1.0 and 0.0 <= cy_new <= 1.0):
-			continue
 
 		# Clamp edges and shrink box accordingly
 		x1 = cx_new - bw_new / 2
@@ -111,6 +110,19 @@ def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, orig
 		bh_f = y2c - y1c
 
 		if bw_f <= 0 or bh_f <= 0:
+			continue
+		
+		# calculating area for spec 1.2.1
+		old_area = bw_new * bh_new
+		new_area = bw_f * bh_f
+		if new_area < old_area * 0.75:
+			continue
+		# calculating pixels for spec 1.2.2 & 1.2.3
+		pw = bw_f * w
+		ph = bh_f * h
+		if pw < 64 or ph < 48:
+			continue
+		if pw > 448 or ph > 336:
 			continue
 
 		output_lines.append(
