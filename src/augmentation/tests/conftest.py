@@ -114,28 +114,32 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 def pytest_generate_tests(metafunc):
 	"""
-	If a test uses `tmp_image`, expand any directory entries in the fixture's
-	params into individual image file paths at collection time.
+	Expand `tmp_image` and/or `tmp_label` params at collection time.
+	Directory entries from --asset-dir are expanded into individual files.
 	"""
-	if "tmp_image" not in metafunc.fixturenames:
-		return
+	base_params = ["random", "middle"]
 
-	raw_params = ["random", "middle"]  # keep your base params here
-
-	# Add your asset directory — swap this path for your real one
 	asset_dir_str = (
-        metafunc.config.getoption("--asset-dir", default=None)
-        or metafunc.config.getini("asset_dir")
-    	)
-	asset_dir = Path(asset_dir_str).resolve()
-	if asset_dir.is_dir():
-		image_files = sorted(
-			p for p in asset_dir.iterdir()
-			if p.suffix.lower() in IMAGE_EXTENSIONS
-			)
-		raw_params.extend(image_files)  # each file becomes its own param
+		metafunc.config.getoption("--asset-dir", default=None)
+		or metafunc.config.getini("asset_dir")
+	)
+	asset_dir = Path(asset_dir_str).resolve() if asset_dir_str else None
 
-	metafunc.parametrize("tmp_image", raw_params, indirect=True)
+	def build_params(include_assets):
+		params = list(base_params)
+		if include_assets and asset_dir and asset_dir.is_dir():
+			image_files = sorted(
+				p for p in asset_dir.iterdir()
+				if p.suffix.lower() in IMAGE_EXTENSIONS
+			)
+			params.extend(image_files)
+		return params
+
+	if "tmp_image" in metafunc.fixturenames:
+		metafunc.parametrize("tmp_image", build_params(include_assets=True), indirect=True)
+
+	if "tmp_label" in metafunc.fixturenames:
+		metafunc.parametrize("tmp_label", build_params(include_assets=True), indirect=True)
 
 @pytest.fixture
 def tmp_image(request, tmp_path):
@@ -165,3 +169,43 @@ def tmp_image(request, tmp_path):
 			pytest.skip(f"Image not found: {str(image_file)}")
 		return image_file
 	
+@pytest.fixture
+def tmp_label(request, tmp_path):
+	"""
+	Creates a temporary image AND label file, or returns a real (image, label) pair
+	from the asset dir. The label is expected to sit next to the image with the same stem.
+
+	:return (image_path, label_path): tuple of image path and label path
+	"""
+	if request.param == "random":
+		image_file = tmp_path / "tmp_rand_image.png"
+		image = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+		cv2.imwrite(str(image_file), image)
+		label_file = tmp_path / "tmp_rand_image.txt"
+		label_file.write_text(
+			"0 0.300000 0.350000 0.200000 0.180000\n"  # 128x86 px  — passes min, passes max
+			"0 0.700000 0.650000 0.400000 0.350000\n"  # 256x168 px — passes min, passes max
+		)
+		return image_file, label_file
+
+	elif request.param == "middle":
+		image_file = tmp_path / "tmp_mid_image.png"
+		image = np.full(shape=(480, 640, 3), fill_value=127, dtype=np.uint8)
+		cv2.imwrite(str(image_file), image)
+		label_file = tmp_path / "tmp_mid_image.txt"
+		label_file.write_text(
+			"0 0.500000 0.500000 0.300000 0.250000\n"  # 192x120 px — centre box
+			"1 0.200000 0.800000 0.150000 0.130000\n"  # 96x62 px   — smaller box
+		)
+		return image_file, label_file
+
+	else:
+		image_file = Path(request.param)
+		if not image_file.exists():
+			pytest.skip(f"Image not found: {str(image_file)}")
+
+		label_file = image_file.with_suffix(".txt")
+		if not label_file.exists():
+			pytest.skip(f"Label not found for image: {str(label_file)}")
+
+		return image_file, label_file
