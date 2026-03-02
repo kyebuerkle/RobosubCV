@@ -52,6 +52,7 @@ def robo_arg_parse():
 	parser.add_argument('-s', "--save", help="save directory for the training model")
 	parser.add_argument('-sat', "--saturation", help="saturation augmentation values, comma seperated eg: 0.5,1,1.75")
 	parser.add_argument('-exp', "--exposure", help="exposure augmentation values, comma seperated eg: 0.5,1,1.75")
+	parser.add_argument('-res', "--resize", help="scale / resize augmentation values, comma seperated eg: 0.5,1,1.75,3")
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 	arg_dict = vars(args)
@@ -62,7 +63,7 @@ def robo_arg_parse():
 		arg_dict.pop("key")
 
 	#	parsing lists
-	for key in ["exposure", "saturation"]:
+	for key in ["exposure", "saturation", "resize"]:
 		if key in arg_dict:
 			val = arg_dict.get(key)
 			arg_dict[key] = list(parse_float_list(val))
