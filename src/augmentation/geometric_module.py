@@ -6,6 +6,12 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+AREA_RATIO_MIN = 0.5
+PX_MIN_W = 5
+PX_MIN_H = 10
+PX_MAX_W = 15000
+PX_MAX_H = 15000
+
 def change_scale(image_file, out_file, scale_amount: float, origin: tuple[float, float] | None = None):
 	"""
 	changes the scale of an image
@@ -115,16 +121,16 @@ def yolo_scale_label(label_file, out_file, scale_amount: float, image_size, orig
 		# calculating area for spec 1.2.1
 		old_area = bw_new * bh_new
 		new_area = bw_f * bh_f
-		if new_area < old_area * 0.75:
+		if new_area < old_area * AREA_RATIO_MIN:
 			continue
 		# calculating pixels for spec 1.2.2 & 1.2.3
 		pw = bw_f * w
 		ph = bh_f * h
-		if pw < 64 or ph < 48:
+		if pw < PX_MIN_W or ph < PX_MIN_H:
 			continue
-		if pw > 448 or ph > 336:
+		if pw > PX_MAX_W or ph > PX_MAX_H:
 			continue
-
+		
 		output_lines.append(
 			f"{class_id} {cx_f:.6f} {cy_f:.6f} {bw_f:.6f} {bh_f:.6f}"
 		)

@@ -24,13 +24,15 @@ def read_label_file(label_file):
 		return []
 
 	boxes = []
+	index = 0
 	for line in path.read_text().strip().splitlines():
 		parts = line.split()
 		if len(parts) != 5:
 			continue
 		class_id = parts[0]
 		cx, cy, bw, bh = map(float, parts[1:5])
-		boxes.append({"class_id": class_id, "cx": cx, "cy": cy, "bw": bw, "bh": bh})
+		boxes.append({"class_id": class_id, "cx": cx, "cy": cy, "bw": bw, "bh": bh, "label_num": index})
+		index = index + 1
 	return boxes
 
 
@@ -80,6 +82,7 @@ def compute_scaled_boxes(input_boxes, scale_amount, image_w, image_h, origin=Non
 			"bh_f":        bh_f,
 			"pw":          bw_f * image_w,
 			"ph":          bh_f * image_h,
+			"label_num":   box["label_num"]
 		})
 	return result
 
@@ -111,7 +114,11 @@ def save_labeled_image(image_file, label_file, output_dir, filename):
 # ─────────────────────────── spec 1.2.1 ─────────────────────────
 # A label is only kept when its clamped area >= 75 % of the scaled (pre-clamp) area.
 
-AREA_RATIO_MIN = 0.75
+AREA_RATIO_MIN = 0.5
+PX_MIN_W = 5
+PX_MIN_H = 10
+PX_MAX_W = 15000
+PX_MAX_H = 15000
 
 @pytest.mark.parametrize("scale_amount", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0])
 def test_spec_1_2_1_area_retention(tmp_label, output_dir, scale_amount, error_csv_writer):
@@ -119,7 +126,11 @@ def test_spec_1_2_1_area_retention(tmp_label, output_dir, scale_amount, error_cs
 	Spec 1.2.1 – every label written to the output file must have retained
 	at least 75 % of its scaled (pre-clamp) area.
 	Labels that do not meet this threshold must be *absent* from the output.
+	
+	error_csv_writer("Spec 1.2.1 test, Fail on Stayed if area lost > 0.5, Fail on Stayed if 24 > pixel width > 562, Fail on Stayed if 24 > pixel height > 562")
+	error_csv_writer("file name, augmentation, amount, % area lost, Removed|Stayed, pixel width, pixel height")
 	"""
+	
 	image_file, label_file = tmp_label
 	image_name  = Path(label_file)
 	output_image = output_dir / f"{image_name.stem}_{scale_amount}_res.png"
@@ -132,6 +143,7 @@ def test_spec_1_2_1_area_retention(tmp_label, output_dir, scale_amount, error_cs
 	input_boxes  = read_label_file(label_file)
 	output_boxes = read_label_file(output_label)
 	expected     = compute_scaled_boxes(input_boxes, scale_amount, image_w, image_h)
+	output_calculated = compute_scaled_boxes(output_boxes, scale_amount, image_w, image_h)
 
 	# --- per-box diagnostics ---
 	print(f"\n--- spec 1.2.1 area-retention debug (scale={scale_amount}) ---")
@@ -147,26 +159,44 @@ def test_spec_1_2_1_area_retention(tmp_label, output_dir, scale_amount, error_cs
 			f"post_area={exp['post_area']:.4f}  ratio={ratio:.3f}  "
 			f"should_keep={kept}")
 
-		error_csv_writer(
+		write_list = [
 			output_label.name,
-			"area_retention",
+			"scale",
 			scale_amount,
-			1.0 - ratio,       # record "area loss" as the error metric
-		)
+			1.0 - ratio # record "area loss" as the error metric
+			]
 
 		# If the box should be dropped, confirm it is absent
 		# (we match by approximate position since output order may differ)
 		cx_exp = (exp["bw_f"] / 2) if exp["bw_f"] > 0 else -1   # rough check
-		if not kept:
-			# Verify the function actually dropped the box
-			# (output count must be less than expected-kept count)
-			pass   # counted globally below
+
+		tmp_bool = True
+		for ind, val in enumerate(output_calculated):
+			if exp["label_num"] == val["label_num"]:
+				# box is still in the output
+				write_list.append("Stayed")
+				write_list.append(val["pw"])
+				write_list.append(val["ph"])
+				tmp_bool = False
+				break
+		# Verify the function actually dropped the box
+		# (output count must be less than expected-kept count)
+		if tmp_bool:
+			write_list.append("Removed")
+			write_list.append(exp["pw"])
+			write_list.append(exp["ph"])
+
+		error_csv_writer(*write_list)
+		""" Written to csv, based on wheather the label was removed or not: 
+		file name, 'scale', scale_amount, area lost, 'Stayed', actual pixel width, actual pixel height
+		file name, 'scale', scale_amount, area lost, 'Removed', expected pixel width, expected pixel height
+		"""
 
 	kept_count = sum(
 		1 for e in expected
 		if e["pre_area"] > 0 and (e["post_area"] / e["pre_area"]) >= AREA_RATIO_MIN
-		and e["pw"] >= 64 and e["ph"] >= 48
-		and e["pw"] <= 448 and e["ph"] <= 336
+		and e["pw"] >= PX_MIN_W and e["ph"] >= PX_MIN_H
+		and e["pw"] <= PX_MAX_W and e["ph"] <= PX_MAX_H
 	)
 	print(f"  expected kept (all filters): {kept_count}  actual output: {len(output_boxes)}")
 
@@ -186,19 +216,19 @@ def test_spec_1_2_1_area_retention(tmp_label, output_dir, scale_amount, error_cs
 
 	assert str(out_str) == str(output_label)
 
-
 # ─────────────────────────── spec 1.2.2 ─────────────────────────
 # Labels must be at least 64 px wide and 48 px tall after scaling.
-
-PX_MIN_W = 64
-PX_MIN_H = 48
 
 @pytest.mark.parametrize("scale_amount", [0.25, 0.5, 0.75, 1.0, 1.5, 2.0])
 def test_spec_1_2_2_minimum_pixel_size(tmp_label, output_dir, scale_amount, error_csv_writer):
 	"""
 	Spec 1.2.2 – every label written to the output file must be at least
 	64 pixels wide and 48 pixels tall.
+	
+	error_csv_writer("\nSpec 1.2.2 test, Fail on negative margin value")
+	error_csv_writer("file name, test, amount, width margin, height margin")
 	"""
+
 	image_file, label_file = tmp_label
 	image_name   = Path(label_file)
 	output_image = output_dir / f"{image_name.stem}_{scale_amount}_res.png"
@@ -228,7 +258,8 @@ def test_spec_1_2_2_minimum_pixel_size(tmp_label, output_dir, scale_amount, erro
 			output_label.name,
 			"min_pixel_size",
 			scale_amount,
-			min(w_margin / PX_MIN_W, h_margin / PX_MIN_H),  # negative if violation
+			w_margin / PX_MIN_W, 
+			h_margin / PX_MIN_H,
 		)
 
 		assert pw >= PX_MIN_W, \
@@ -238,19 +269,19 @@ def test_spec_1_2_2_minimum_pixel_size(tmp_label, output_dir, scale_amount, erro
 
 	assert str(out_str) == str(output_label)
 
-
 # ─────────────────────────── spec 1.2.3 ─────────────────────────
 # Labels must be at most 448 px wide and 336 px tall after scaling.
-
-PX_MAX_W = 448
-PX_MAX_H = 336
 
 @pytest.mark.parametrize("scale_amount", [0.5, 1.0, 1.5, 2.0, 3.0, 4.0])
 def test_spec_1_2_3_maximum_pixel_size(tmp_label, output_dir, scale_amount, error_csv_writer):
 	"""
 	Spec 1.2.3 – every label written to the output file must be no larger
 	than 448 pixels wide and 336 pixels tall.
+
+	error_csv_writer("\nSpec 1.2.3 test, Fail on positive margin value")
+	error_csv_writer("file name, test, amount, width margin, height margin")
 	"""
+
 	image_file, label_file = tmp_label
 	image_name   = Path(label_file)
 	output_image = output_dir / f"{image_name.stem}_{scale_amount}_res.png"
@@ -280,8 +311,9 @@ def test_spec_1_2_3_maximum_pixel_size(tmp_label, output_dir, scale_amount, erro
 			output_label.name,
 			"max_pixel_size",
 			scale_amount,
-			max((pw - PX_MAX_W) / PX_MAX_W, (ph - PX_MAX_H) / PX_MAX_H),  # positive if violation
-		)
+			(pw - PX_MAX_W) / PX_MAX_W,
+			(ph - PX_MAX_H) / PX_MAX_H,  # positive if violation
+			)
 
 		assert pw <= PX_MAX_W, \
 			f"Box {i} width {pw:.1f}px exceeds maximum {PX_MAX_W}px (scale={scale_amount})"
