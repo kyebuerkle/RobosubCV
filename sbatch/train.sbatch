@@ -19,9 +19,14 @@
 module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 
+#	Configure your Save Directory
 SAVE_DIR=$HOME/RobosubCV/results
 ROBOFLOW_API=[API_KEY]
 ROBOFLOW_URL=[ROBOFLOW_URL]
 
+#	Augmentation parameters, comma seperated no spaces
+EXPOSURE=0.615,1,1.385
+SATURATION=0.7,1,1.3
+
 poetry install
-poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -y
+poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -exp $EXPOSURE -sat $SATURATION 
