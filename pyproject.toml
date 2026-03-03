@@ -31,4 +31,4 @@ addopts = """
     --ignore=src/roboflow_datasets/tests/test_coco_download.py
     --ignore=src/roboflow_datasets/tests/test_yolo_download.py
 """
-asset_dir = ["assets/test-images"]
+asset_dir = "assets/test-images"
