@@ -91,6 +91,8 @@ class Config:
 
 		:returns str: The path to the dataset
 		"""
+		if not self.project or self.project == "":
+			return ""
 		return os.path.abspath(os.path.join(self.dataset_dir, f"{self.project}-v{self.version}"))
 	
 	def get_yaml(self):
