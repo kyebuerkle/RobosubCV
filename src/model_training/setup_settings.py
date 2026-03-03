@@ -81,7 +81,7 @@ def main():
 			print(f"Not creating, saving default directory. Re-run script to change again.")
 			result_path = robosubcv_dir / "results/"
 	
-	result_path = result_path.absolute()
+	result_path = result_path.absolute().resolve()
 	if not result_path.exists():
 		print(f"ERROR: failed to save dataset directory at: {result_path}, exiting...")
 		sys.exit(1)
@@ -101,7 +101,7 @@ def main():
 			print(f"Not creating, saving default directory. Re-run script to change again.")
 			dir_path = robosubcv_dir / "data/"
 	
-	dir_path = dir_path.absolute()
+	dir_path = dir_path.absolute().resolve()
 	if not dir_path.exists():
 		print(f"ERROR: failed to save dataset directory at: {dir_path}, exiting...")
 		sys.exit(1)
