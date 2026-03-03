@@ -71,7 +71,7 @@ def main():
 	result_str = input("\nType in your prefered results directory for the YOLO output to go to (press Enter for default): ")
 	result_path = Path(result_str)
 	if not result_str.strip():
-		dir_path = robosubcv_dir / "results/"
+		result_path = robosubcv_dir / "results/"
 	elif not result_path.exists():
 		answer = input(f"Directory: {result_path}, does not exist. Do you want it to be created? [y/n] ")
 		if _check_yes(answer):
@@ -85,9 +85,10 @@ def main():
 	if not result_path.exists():
 		print(f"ERROR: failed to save dataset directory at: {result_path}, exiting...")
 		sys.exit(1)
+	print(f"Saving models to {result_path}\n")
 
 	#	Save Directory
-	dir_str = input("\nType in your prefered save directory for image training datasets (press Enter for default): ")
+	dir_str = input("Type in your prefered save directory for image training datasets (press Enter for default): ")
 	dir_path = Path(dir_str)
 	if not dir_str.strip():
 		dir_path = robosubcv_dir / "data/"
@@ -104,6 +105,7 @@ def main():
 	if not dir_path.exists():
 		print(f"ERROR: failed to save dataset directory at: {dir_path}, exiting...")
 		sys.exit(1)
+	print(f"Saving datasts to {dir_path}\n")
 
 	#	Augmentation
 	print("Finally, enter the amount of augmentation you want for each of the three types")
