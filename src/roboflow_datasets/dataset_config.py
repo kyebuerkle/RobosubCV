@@ -8,7 +8,7 @@ import os
 import json
 
 from roboflow_datasets import roboflow_login
-from augmentation import yolo_change_exposure, yolo_change_saturation
+from augmentation import yolo_change_exposure, yolo_change_saturation, yolo_change_resize
 
 class Config:
 	#	Roboflow config settings
@@ -25,6 +25,7 @@ class Config:
 	#	Augmentation settings
 	saturation = []
 	exposure = []
+	resize = []
 
 	"""--------Private------------"""
 	def __init__(self, args = None, **kwargs):
@@ -128,7 +129,8 @@ class Config:
 				"save" : self.save_dir,
 				"key" : self.api_key,
 				"saturation" : self.saturation,
-				"exposure" : self.exposure
+				"exposure" : self.exposure,
+				"resize" : self.resize
 			}	
 		return ret
 	
@@ -174,6 +176,8 @@ class Config:
 				self.saturation = val
 			elif (key == "exposure"):
 				self.exposure = val
+			elif (key == "resize"):
+				self.resize = val
 
 		if (self.workspace is None) or (self.workspace == ""):
 			return False
@@ -254,9 +258,10 @@ class Config:
 		"""
 		if "saturation" in kwargs:
 			self.saturation = kwargs.get("saturation")
-		elif "exposure" in kwargs:
-			self.saturation = kwargs.get("exposure")
-		
+		if "exposure" in kwargs:
+			self.exposure = kwargs.get("exposure")
+		if "resize" in kwargs:
+			self.resize = kwargs.get("resize")
 
 		input_dataset = self.get_dataset()
 		self.version += 1
@@ -274,5 +279,10 @@ class Config:
 				self.exposure, "{file}_exp{ind}{ext}"
 				)
 			input_dataset = augmented_dataset
+		if isinstance(self.resize, list) and self.resize:
+			yolo_change_resize(
+				input_dataset, augmented_dataset,
+				self.resize, "{file}_res{ind}{ext}"
+				)
 		
 		return input_dataset

@@ -4,7 +4,9 @@
 import argparse
 
 def parse_float_list(value):
-	"""Parse comma-separated list of floats"""
+	"""Parse comma-separated list of floats, return None on single value of 0"""
+	if value == 0 or value.lower() == "none":
+		return None
 	try:
 		return [float(x.strip()) for x in value.split(',')]
 	except ValueError:

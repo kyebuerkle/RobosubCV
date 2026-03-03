@@ -34,6 +34,7 @@ sbatch/stream-out/*
 *.lo
 *.err
 *.pt
+*.csv
 
 # Executables
 **/bin/

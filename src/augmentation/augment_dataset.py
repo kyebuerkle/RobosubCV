@@ -8,7 +8,8 @@ import yaml
 import json
 import shutil
 
-from augmentation import change_exposure, change_saturation
+from .photometric_module import change_exposure, change_saturation
+from .geometric_module import change_scale, yolo_scale_label
 import augmentation.config as config
 
 #	this is cool, its a function that you input another function as a parameter, it overrides it so that it loops through
@@ -44,7 +45,7 @@ def _dir_change_generic(
 	# delete originals and move augmented images
 	replace_mode = (input_path == output_path)
 	if replace_mode:
-		if config.VERBOSE:
+		if config.VVERBOSE:
 			print("replacing input dir")
 		temp_dir = input_path.parent / f"{input_path.name}_temp"
 		temp_dir.mkdir(exist_ok=True)
@@ -57,7 +58,7 @@ def _dir_change_generic(
 				if f.is_file() and f.suffix.lower() in [".jpg", ".png", ".jpeg"]]
 	
 	for ind, img_file in enumerate(image_files):
-		if config.VERBOSE:
+		if config.VVERBOSE:
 			print(f"Augmenting image {img_file.name}...")
 		for vind, val in enumerate(value_list):
 			if name_conv:
@@ -74,7 +75,7 @@ def _dir_change_generic(
 			augmentation_func(img_file, output_file, val)
 	
 	if replace_mode:
-		if config.VERBOSE:
+		if config.VVERBOSE:
 			print("replacing original directory")
 		for img_file in image_files:
 			img_file.unlink()
@@ -85,7 +86,7 @@ def _dir_change_generic(
 	if config.VERBOSE:
 		print(f"Created {len(image_files)*len(value_list)} augmented images from {len(image_files)} images")
 
-def _yolo_change_labels(
+def _yolo_copy_labels(
 	labels_in_dir, labels_out_dir, 
 	value_list: List[float],
 	name_conv: str = ""
@@ -109,7 +110,7 @@ def _yolo_change_labels(
 	# delete originals and move augmented images
 	replace_mode = (input_path == output_path)
 	if replace_mode:
-		if config.VERBOSE:
+		if config.VVERBOSE:
 			print("replacing label dir")
 		temp_dir = input_path.parent / f"{input_path.name}_temp"
 		temp_dir.mkdir(exist_ok=True)
@@ -176,6 +177,23 @@ def dir_change_saturation(input_dir, output_dir, saturation_list: List[float], n
 		change_saturation, name_conv
 		)
 
+def dir_change_scale(input_dir, output_dir, saturation_list: List[float], name_conv: str = "", origin = None):
+	"""
+	Apply scale changes to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param saturation_list: list of scale value percentages 0.0 -> 2.0
+	:type saturation_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = scale value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	partial_change_scale = lambda img, out, amount: change_scale(img, out, amount, origin)
+	_dir_change_generic(
+		input_dir, output_dir, saturation_list,
+		partial_change_scale, name_conv
+		)
+
 def yolo_change_exposure(input_dataset, output_dataset, exposure_list: List[float], name_conv: str = ""):
 	"""
 	Apply exposure changes to all directories in a yolov8 dataset
@@ -211,6 +229,25 @@ def yolo_change_saturation(input_dataset, output_dataset, saturation_list: List[
 	_yolo_dataset_generic(
 		input_dataset, _yolo_saturation_function,
 		saturation_list, name_conv,
+		output_dataset
+		)
+	
+def yolo_change_resize(input_dataset, output_dataset, resize_list: List[float], name_conv: str = ""):
+	"""
+	Apply resize changes to all directories in a yolov8 dataset
+	
+	:param input_dataset: input dataset path
+	:param output_dataset: output dataset path
+	:param resize_list: list of values to augment
+	:type resize_list: List[float]
+	:param name_conv: naming convention
+	:type name_conv: str
+	"""
+	if not output_dataset or input_dataset == output_dataset:
+		output_dataset = None
+	_yolo_dataset_generic(
+		input_dataset, _yolo_resize_function,
+		resize_list, name_conv,
 		output_dataset
 		)
 
@@ -259,10 +296,10 @@ def _yolo_dataset_generic(
 	if new_dataset:
 		new_dataset_path = Path(new_dataset)
 		if (new_dataset_path.exists() and any(new_dataset_path.iterdir())):
-			if config.VERBOSE:
+			if config.VVERBOSE:
 				print("This directory already exists with stuff, overwriting...")
 			shutil.rmtree(new_dataset_path)
-		new_dataset_path.mkdir(parents=True)
+		new_dataset_path.mkdir(parents=True, exist_ok=True)
 		new_yaml = {}
 		
 	splits = ['train', 'val', 'test']
@@ -357,7 +394,7 @@ def _yolo_exposure_function(
 		img_in_dir, img_out_dir, value_list, 
 		change_exposure, name_conv
 		)
-	_yolo_change_labels(
+	_yolo_copy_labels(
 		labels_in_dir, labels_out_dir,
 		value_list, name_conv
 		)
@@ -372,7 +409,109 @@ def _yolo_saturation_function(
 		img_in_dir, img_out_dir, value_list, 
 		change_saturation, name_conv
 		)
-	_yolo_change_labels(
+	_yolo_copy_labels(
 		labels_in_dir, labels_out_dir,
 		value_list, name_conv
 		)
+
+def _yolo_resize_function(
+	img_in_dir, img_out_dir,
+	labels_in_dir, labels_out_dir,
+	value_list, name_conv
+	):
+	"""This is used to combine the resize functions for the _yolo_dataset_generic input"""
+	"""
+	Generic function to apply augmentations to all images in a directory.
+	
+	:param input_dir: Directory containing input images
+	:param output_dir: Directory to save output images
+	:param value_list: List of values to apply
+	:param augmentation_func: Function to call (change_exposure or change_saturation)
+	:param name_conv: Format string for output names: ind = augmentation index, val = list value, file = original file name, ext = extention
+	"""
+	images_dir = Path(img_in_dir).resolve()
+	images_out_dir = Path(img_out_dir).resolve()
+	labels_dir = Path(labels_in_dir).resolve()
+	labels_out_dir = Path(labels_out_dir).resolve()
+
+	if not images_dir.is_dir():
+		print(f"{images_dir} is not a directory!")
+		return
+	if not value_list:
+		print(f"No input for change_resize values")
+		return
+	
+	# delete originals and move augmented images
+	replace_mode = (images_dir == images_out_dir)
+	if replace_mode:
+		if config.VVERBOSE:
+			print("replacing input dir for resize dataset")
+		temp_dir = images_dir.parent / f"{images_dir.name}_temp"
+		temp_dir.mkdir(exist_ok=True)
+		working_output = temp_dir
+
+		temp_ldir = labels_dir.parent / f"{labels_dir.name}_temp"
+		temp_ldir.mkdir(exist_ok=True)
+		working_label_output = temp_ldir
+	else:
+		images_out_dir.mkdir(parents=True, exist_ok=True)
+		working_output = images_out_dir
+
+		labels_out_dir.mkdir(parents=True, exist_ok=True)
+		working_label_output = labels_out_dir
+	
+	image_files = [f for f in images_dir.iterdir() 
+				if f.is_file() and f.suffix.lower() in [".jpg", ".png", ".jpeg"]]
+	label_files = []
+	
+	for ind, img_file in enumerate(image_files):
+		if config.VVERBOSE:
+			print(f"Augmenting image {img_file.name}...")
+
+		label_file = labels_dir / f"{img_file.stem}.txt"
+		if not label_file.exists():
+			print(f"No label file associated with {img_file.name}\nSkipping resize...")
+			continue
+		
+		label_files.append(label_file)
+		for vind, val in enumerate(value_list):
+			if name_conv:
+				file_name = name_conv.format(
+					ind = vind,
+					val = f"{val:.3f}",
+					file = img_file.stem,
+					ext = img_file.suffix
+					)
+				label_name = name_conv.format(
+					ind = vind,
+					val = f"{val:.3f}",
+					file = label_file.stem,
+					ext = label_file.suffix
+					)
+			else:
+				file_name = f"{vind}_{img_file.name}"
+				label_name = f"{vind}_{label_file.name}"
+			
+			output_file = working_output / file_name
+			output_label = working_label_output / label_name
+			#	TODO: get the correct origin points from design
+			change_scale(img_file, output_file, val)
+			yolo_scale_label(label_file, output_label, val, img_file)
+	
+	if replace_mode:
+		if config.VVERBOSE:
+			print("replacing original resize directory")
+		for img_file in image_files:
+			img_file.unlink()
+		for label_file in label_files:
+			label_file.unlink()
+		for temp_file in temp_dir.iterdir():
+			shutil.move(str(temp_file), str(images_dir / temp_file.name))
+		for temp_label in temp_ldir.iterdir():
+			shutil.move(str(temp_label), str(labels_dir / temp_label.name))
+		
+		temp_dir.rmdir()
+		temp_ldir.rmdir()
+
+	if config.VERBOSE:
+		print(f"Created {len(image_files)*len(value_list)} resized images from {len(image_files)} images")

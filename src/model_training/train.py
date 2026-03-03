@@ -24,18 +24,24 @@ def main(arg_dict, **kwargs):
 		return False
 	
 	config.roboflow_download(format = "yolov8", yes = True)
-	dowloaded_dataset = config.get_dataset()
-	yaml_file = config.get_yaml()
 	save_dir = config.get_save_dir()
-	if not yaml_file:
-		print(f"No yaml file found")
-		return False
 	if not save_dir:
 		print(f"No save directory for model")
 		return False
 	
 	dataset_dir = config.run_augmentations()
+	yaml_file = config.get_yaml()
+	if not yaml_file:
+		print(f"No yaml file found")
+		return False
 	
+	print(f"\n"\
+		f"────────────────────────────────────────────────────────────────────────────────────────────"\
+		f"Training model on dataset: {yaml_file}"\
+		f"────────────────────────────────────────────────────────────────────────────────────────────"\
+		f"\n"
+		)
+
 	resutls = model.train(
 		data 	= yaml_file,                
 		epochs 	= arg_dict.get("epochs", 15),

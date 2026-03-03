@@ -27,6 +27,7 @@ ROBOFLOW_URL=[ROBOFLOW_URL]
 #	Augmentation parameters, comma seperated no spaces
 EXPOSURE=0.615,1,1.385
 SATURATION=0.7,1,1.3
+RESIZE=0
 
 poetry install
-poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -exp $EXPOSURE -sat $SATURATION 
+poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -exp $EXPOSURE -sat $SATURATION -res $RESIZE 
