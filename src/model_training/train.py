@@ -2,6 +2,7 @@
 #	@brief: trains the YOLO model in Tempest
 
 import sys
+import json
 from ultralytics import YOLO
 from roboflow_datasets import robo_arg_parse, Config
 
@@ -37,7 +38,9 @@ def main(arg_dict, **kwargs):
 	
 	print(f"\n"\
 		f"────────────────────────────────────────────────────────────────────────────────────────────\n"\
-		f"Training model on dataset: {yaml_file}\n"\
+		f"Training model on dataset yaml: {yaml_file}\n"\
+		f"    Config settings:\n"
+		f"{json.dumps(config.to_dict(), indent=4)}\n"
 		f"────────────────────────────────────────────────────────────────────────────────────────────\n"\
 		f"\n"
 		)
