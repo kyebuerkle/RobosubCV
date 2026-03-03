@@ -139,7 +139,7 @@ class Config:
 		Saves the current Config to .json file
 		"""
 		save_dict = self.to_dict()
-		save_dict.pop("key")
+		#save_dict.pop("key")
 		with open(self.path, "w") as f:
 			json.dump(save_dict, f, indent = 2)
 		
@@ -159,9 +159,9 @@ class Config:
 			if (val is None or val == ""):
 				pass
 			elif (key == "workspace"):
-				self.workspace = val
+				self.workspace = str(val)
 			elif (key == "project"):
-				self.project = val
+				self.project = str(val)
 			elif (key == "version"):
 				self.version = val
 			elif (key == "url"):
@@ -169,9 +169,9 @@ class Config:
 			elif (key == "api_key" or key == "key"):
 				self.api_key = val
 			elif (key == "directory"):
-				self.dataset_dir = val
+				self.dataset_dir = str(val)
 			elif (key == "save_dir" or key == "save_path" or key == "save"):
-				self.save_dir = val
+				self.save_dir = str(val)
 			elif (key == "saturation"):
 				self.saturation = val
 			elif (key == "exposure"):

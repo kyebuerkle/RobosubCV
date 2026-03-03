@@ -10,7 +10,7 @@
 ## 1000G max for H100
 ## 500GB for Quad A100
 #SBATCH --mem=128G
-#SBATCH --time=0-05:00:00
+#SBATCH --time=0-04:00:00
 #SBATCH --job-name=RobosubCV
 ## %x is the job name and %j and the job number
 #SBATCH --output=./stream-out/%x-%j.out
@@ -19,15 +19,8 @@
 module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 
-#	Configure your Save Directory
-SAVE_DIR=$HOME/RobosubCV/results
-ROBOFLOW_API=[API_KEY]
+#	Past the URL to your dataset here
 ROBOFLOW_URL=[ROBOFLOW_URL]
 
-#	Augmentation parameters, comma seperated no spaces
-EXPOSURE=0.615,1,1.385
-SATURATION=0.7,1,1.3
-RESIZE=0
-
 poetry install
-poetry run python $HOME/RobosubCV/src/model_training/train.py -s $SAVE_DIR -u $ROBOFLOW_URL -k $ROBOFLOW_API -exp $EXPOSURE -sat $SATURATION -res $RESIZE 
+poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL 
