@@ -8,7 +8,7 @@ from general_lib import parse_float_list
 
 def get_args():
 	parser = argparse.ArgumentParser(
-		description="Apply photometric augmentations (exposure/saturation) to images",
+		description="Apply augmentations to images",
 		formatter_class=argparse.RawDescriptionHelpFormatter,
 		epilog="""
 Examples:

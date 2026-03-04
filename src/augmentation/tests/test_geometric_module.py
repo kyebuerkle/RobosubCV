@@ -254,6 +254,7 @@ def test_spec_1_2_2_minimum_pixel_size(tmp_label, output_dir, scale_amount, erro
 		print(f"  box {i}: pw={pw:.1f}px  ph={ph:.1f}px  "
 			f"w_margin={w_margin:.1f}  h_margin={h_margin:.1f}")
 
+		"""
 		error_csv_writer(
 			output_label.name,
 			"min_pixel_size",
@@ -261,6 +262,7 @@ def test_spec_1_2_2_minimum_pixel_size(tmp_label, output_dir, scale_amount, erro
 			w_margin / PX_MIN_W, 
 			h_margin / PX_MIN_H,
 		)
+		"""
 
 		assert pw >= PX_MIN_W, \
 			f"Box {i} width {pw:.1f}px is below minimum {PX_MIN_W}px (scale={scale_amount})"
@@ -307,6 +309,7 @@ def test_spec_1_2_3_maximum_pixel_size(tmp_label, output_dir, scale_amount, erro
 		print(f"  box {i}: pw={pw:.1f}px  ph={ph:.1f}px  "
 			f"w_headroom={w_headroom:.1f}  h_headroom={h_headroom:.1f}")
 
+		"""
 		error_csv_writer(
 			output_label.name,
 			"max_pixel_size",
@@ -314,6 +317,7 @@ def test_spec_1_2_3_maximum_pixel_size(tmp_label, output_dir, scale_amount, erro
 			(pw - PX_MAX_W) / PX_MAX_W,
 			(ph - PX_MAX_H) / PX_MAX_H,  # positive if violation
 			)
+		"""
 
 		assert pw <= PX_MAX_W, \
 			f"Box {i} width {pw:.1f}px exceeds maximum {PX_MAX_W}px (scale={scale_amount})"

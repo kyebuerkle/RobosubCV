@@ -45,9 +45,11 @@ This will take you through some steps to log into roboflow, this will be saved i
 
 On success it will print: `Successful Login!` and then attempt to print your default workspace, use this to verify that it is Your login. (this doesn't matter if it can't print as long as you have a URL for training)
 
+NOTE: `../model_training/setup_settings.py` does a much better job walking through all the steps and getting the API key.
+
 ##		Tests
 
-Roboflow upload and download won't be using 'unit tests', instead they will be tested through scripts since they require human input.
+Roboflow upload and download won't be using 'unit tests', instead they will be tested through scripts since they require human input. So these can only be called if you run them directly.
 
 ###		Download
 

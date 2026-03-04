@@ -38,7 +38,23 @@ def robo_arg_parse():
 	parser = argparse.ArgumentParser(
 		prog = "download_dataset.py",
 		description = "downloads a dataset from roboflow",
-		argument_default = argparse.SUPPRESS
+		argument_default = argparse.SUPPRESS,
+		epilog="""
+	If you want to use these arguments in the 'train.sbatch' script instead of the configuration.json file settup
+	I recomeng using this format:
+	'''train.sbatch
+	#	Past the URL to your dataset here
+	ROBOFLOW_URL=[ROBOFLOW_URL]
+
+	#	argument values
+	SAVE_DIRECTORY=../saving/here
+	SATURATINO=0.5,1
+	EXPOSURE=2,1,0.5
+
+	poetry install
+	poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL -s $SAVE_DIRECTORY -sat $SATURATION -exp $EXPOSURE
+	'''
+		"""
 		)
 	
 	parser.add_argument('-u', "--url", help = "Input the URL of the roboflow project")

@@ -29,3 +29,13 @@ poetry run python train.py [options]
 - `-u` : the URL of the Roboflow dataset you want to train the model on
 - `-exp` : exposure values, comma seperated Eg: `-exp 1.5,1,-0.5`
 - `-sat` : saturation values, comma seperate Eg: `-sat 1.5,1,-0.5`
+
+##    setup_settings.py
+
+This script takes a user through a couple steps to setup their `configureation.json` file. 
+Run:
+```
+poetry run python setup_settings.py
+```
+
+**MAKE SURE** to run this script before schedualing your `train.sbatch` job, unless you used arguments in that script. Otherwise it won't work.
