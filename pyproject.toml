@@ -18,6 +18,7 @@ torchvision = { version = "*", optional = true }
 torchaudio = { version = "*", optional = true }
 pytest = "^9.0.2"
 argparse = "^1.4.0"
+pillow = "^12.1.1"
 
 [build-system]
 requires = ["poetry-core"]
