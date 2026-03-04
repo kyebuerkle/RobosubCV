@@ -2,9 +2,11 @@
 
 This is the general utilities library for the RobosubCV project. The main thing about this lib is that it doesn't require imports from the other packages in RobosubCV. 
 
-There are 2 main modules:
+There are 2 modules:
 1. `util_module.py` is general utility
 2. `pytest_util_module.py` is pytest utility
+
+Plus a script: `draw_labels.py` that draws the labels in a directory onto images from that same directory.
 
 ##		Usage
 
@@ -41,3 +43,33 @@ There are 2 main modules:
 		validate_yolov8_dataset(path)
 	#	run pytest to validate
 	```
+
+###		draw_labels
+
+This script takes in a directory of images and labels, and saves the images with the lables drawn on them into an output directory. 
+
+Run:
+```
+poetry run python draw_labels.py input_dir output_dir [options]
+```
+Use `-h` as an option to figure out how to use
+
+Options:
+- input_dir : input directory with your images and your labels
+- output_dor : output directory to save to
+- -c, --color : the RGB color value of the label boxs
+  
+Ex:
+```
+poetry run python draw_labels.py ../../assets/test-images ../../data/test-labels -c 255 20 150
+```
+
+##		Tests
+
+To run general unit tests, run:
+```
+poetry run pytest
+```
+
+This will run through all the tests in the tests dir of the module you are in
+run this in the main directory (RobosubCV) to run every test accross src
