@@ -3,13 +3,11 @@
 YOLO Live Stream Viewer
 -----------------------
 Features:
-  - Detect and select available cameras (webcam / USB)
-  - Browse and load any .pt model file
-  - Live stream with real-time YOLO bounding boxes
-  - Per-label color and thickness settings (ready to extend in the UI)
+- Detect and select available cameras (webcam / USB)
+- Browse and load any .pt model file
+- Live stream with real-time YOLO bounding boxes
+- Per-label color and thickness settings (ready to extend in the UI)
 
-Requirements:
-    pip install ultralytics opencv-python pillow
 """
 
 import threading
@@ -19,6 +17,9 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 from ultralytics import YOLO
+
+#   edit this for thread count (useful without GPUs)
+cv2.setNumThreads(4)
 
 
 # ──────────────────────────────────────────────
@@ -102,6 +103,10 @@ class YoloStreamApp(tk.Tk):
         self.confidence = tk.DoubleVar(value=0.40)
         self.cameras: list[dict] = []
 
+        #   halves the frames calculated
+        self.last_boxes = []
+        self.frame_count = 0
+
         self._build_ui()
         self._refresh_cameras()
 
@@ -133,12 +138,12 @@ class YoloStreamApp(tk.Tk):
         # Section header helper
         def section(parent, text):
             ttk.Label(parent, text=text, foreground=ACCENT,
-                      font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 2))
+                    font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 2))
 
         # ── Model ──
         section(ctrl, "Model")
         ttk.Label(ctrl, textvariable=self.model_path, wraplength=220,
-                  foreground="#a6e3a1").pack(anchor="w")
+                foreground="#a6e3a1").pack(anchor="w")
         ttk.Button(ctrl, text="Browse .pt file…", command=self._browse_model).pack(fill=tk.X, pady=4)
 
         # ── Camera ──
@@ -147,7 +152,7 @@ class YoloStreamApp(tk.Tk):
         cam_row.pack(fill=tk.X)
         self.cam_var = tk.StringVar()
         self.cam_combo = ttk.Combobox(cam_row, textvariable=self.cam_var,
-                                      state="readonly", width=22)
+                                    state="readonly", width=22)
         self.cam_combo.pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(cam_row, text="↻", width=3, command=self._refresh_cameras).pack(side=tk.LEFT, padx=(4, 0))
 
@@ -158,8 +163,8 @@ class YoloStreamApp(tk.Tk):
         self.conf_label = ttk.Label(conf_row, text=f"{self.confidence.get():.2f}", width=5)
         self.conf_label.pack(side=tk.RIGHT)
         ttk.Scale(conf_row, from_=0.05, to=0.95, variable=self.confidence,
-                  orient=tk.HORIZONTAL, command=self._update_conf_label).pack(
-                      side=tk.LEFT, expand=True, fill=tk.X)
+                orient=tk.HORIZONTAL, command=self._update_conf_label).pack(
+                    side=tk.LEFT, expand=True, fill=tk.X)
 
         # ── Stream controls ──
         section(ctrl, "Stream")
@@ -167,13 +172,13 @@ class YoloStreamApp(tk.Tk):
                                     style="Accent.TButton", command=self._start_stream)
         self.start_btn.pack(fill=tk.X, pady=2)
         self.stop_btn = ttk.Button(ctrl, text="■  Stop Stream", command=self._stop_stream,
-                                   state=tk.DISABLED)
+                                state=tk.DISABLED)
         self.stop_btn.pack(fill=tk.X, pady=2)
 
         # ── Label style editor ──
         section(ctrl, "Label Styles")
         ttk.Label(ctrl, text="Select a label to edit its style:",
-                  foreground="#bac2de").pack(anchor="w")
+                foreground="#bac2de").pack(anchor="w")
         self.label_list_var = tk.StringVar()
         self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
                                         state="readonly", width=26)
@@ -184,7 +189,7 @@ class YoloStreamApp(tk.Tk):
         color_row.pack(fill=tk.X, pady=2)
         ttk.Label(color_row, text="Color:").pack(side=tk.LEFT)
         self.color_preview = tk.Label(color_row, bg=bgr_to_hex(DEFAULT_COLOR_BGR),
-                                      width=4, relief="solid", cursor="hand2")
+                                    width=4, relief="solid", cursor="hand2")
         self.color_preview.pack(side=tk.LEFT, padx=6)
         self.color_preview.bind("<Button-1>", self._pick_color)
 
@@ -199,8 +204,8 @@ class YoloStreamApp(tk.Tk):
         # ── Status bar ──
         self.status_var = tk.StringVar(value="Ready — load a model and select a camera.")
         tk.Label(ctrl, textvariable=self.status_var, bg=PANEL_BG, fg="#f38ba8",
-                 wraplength=230, justify=tk.LEFT, font=("Segoe UI", 9)).pack(
-                     anchor="w", pady=(16, 0))
+                wraplength=230, justify=tk.LEFT, font=("Segoe UI", 9)).pack(
+                    anchor="w", pady=(16, 0))
 
         # ── Right: video canvas ──
         canvas_frame = ttk.Frame(self, padding=PAD)
@@ -336,28 +341,35 @@ class YoloStreamApp(tk.Tk):
             if not ret:
                 break
 
-            # Run YOLO inference
-            results = self.model(frame, verbose=False, conf=self.confidence.get())
+            #   Making frame smaller to reduce frames (this is set for YOLO anyways)
+            frame = cv2.resize(frame, (640, 480))  # or even (416, 416)
 
-            # Draw detections manually so we respect per-label styles
-            for result in results:
-                for box in result.boxes:
-                    cls_id = int(box.cls[0])
-                    label = self.model.names.get(cls_id, str(cls_id))
-                    conf_score = float(box.conf[0])
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+            #   halves the frames calculated
+            self.frame_count += 1
+            run_inference = (self.frame_count % 2 == 0)
 
-                    style = self.label_styles.get(label)
-                    color = style["color_bgr"]
-                    thick = style["thickness"]
+            if run_inference:
+                results = self.model(frame, verbose=False, conf=self.confidence.get(), imgsz=320)
+                self.last_boxes = []
+                for result in results:
+                    for box in result.boxes:
+                        cls_id = int(box.cls[0])
+                        label = self.model.names.get(cls_id, str(cls_id))
+                        conf_score = float(box.conf[0])
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        self.last_boxes.append((label, conf_score, x1, y1, x2, y2))
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
-
-                    text = f"{label} {conf_score:.2f}"
-                    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-                    cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
-                    cv2.putText(frame, text, (x1 + 2, y1 - 4),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            # Always draw last known boxes
+            for (label, conf_score, x1, y1, x2, y2) in self.last_boxes:
+                style = self.label_styles.get(label)
+                color = style["color_bgr"]
+                thick = style["thickness"]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, thick)
+                text = f"{label} {conf_score:.2f}"
+                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+                cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+                cv2.putText(frame, text, (x1 + 2, y1 - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
             # Compute FPS
             now = time.time()
