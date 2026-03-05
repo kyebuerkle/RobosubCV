@@ -9,6 +9,15 @@ This directory holds scripts used to showcase the repository. As it can make a G
 Run: `poetry run python yolo_streamer.py`
 
 The *YOLO Live Stream - CPU Edition* GUI pops up with a blank screen. On the left there are a variety of settings to configure.
+- **Inference Backend** : Optional, the backend for your computer to process the images more efficiently
+  - Select one of the three options if they are installed
+  - NOTE: select this before your model, it will load to modify the model for this device
+  - To install the other two, close out and run these commands, open back up to select which to use:
+  ```
+	pip install onnxruntime
+	pip install openvino
+  ```
+  - Adding these boost performace ~50% to 15 FPS on medium model
 - **Model** : Required, the yolo model you wish to test
   - Press the 'Browse .pt file...' button and select the .pt model you wish to use from your device
 - **Camera** : Required, the camera you wish to use 
@@ -20,19 +29,15 @@ The *YOLO Live Stream - CPU Edition* GUI pops up with a blank screen. On the lef
   - Image size to run model on (imgsz does internally)
 - **Infer every N frames** : Optional, fraction of frames to run the model on
   - 1 is every frame, 2 is every other frame, 3 is once every 3 frames, ect...
-- **Inference Backend** : Optional, the backend for your computer to process the images more efficiently
-  - Select one of the three options if they are installed
-  - To install the other two, close out and run these commands, open back up to select which to use:
-  ```
-	pip install onnxruntime
-	pip install openvino
-  ```
 - **OpenCV CPU Threads** : Optional, number of threads OpenCV utilizes
   - This GUI runs on 3 threads already, this number is the amount OpenCV is alowed to use to show the image
   - Read the note on how to decide this, you don't want too much overhead
 - **Stream** : Required, runs the stream
   - Press play to play the stream, press stop to stop it
   - Recommended to stop and play everytie you adjust settings
+- **Label Styles** : style of the labels
+  - Select the label you want to change, and then edit it's color
+  - You can cahnge the global thickness of the labels too
 - **Performance stats** : Visual, used to check the stream performance
 - **CPU tips** : Visual, tips from Claude on how to optimize performance based on your device
   

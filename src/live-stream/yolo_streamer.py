@@ -247,6 +247,24 @@ class YoloStreamApp(tk.Tk):
                  justify=tk.LEFT).pack(anchor="w", pady=(0, 2))
         tk.Label(ctrl, text=f"Logical cores: {CPU_CORES}", bg=PANEL_BG,
                  fg="#6c7086", font=("Segoe UI", 8)).pack(anchor="w")
+        
+        # ── Backend ──
+        section(ctrl, "Inference backend")
+        hint(ctrl, "ONNX / OpenVINO are faster on CPU than PyTorch")
+
+        backends = [("PyTorch  (default)", "pytorch")]
+        if HAS_ONNX:
+            backends.append(("ONNX Runtime  ✓ installed", "onnx"))
+        else:
+            backends.append(("ONNX Runtime  (pip install onnxruntime)", "onnx"))
+        if HAS_OV:
+            backends.append(("OpenVINO  ✓ installed  [Intel best]", "openvino"))
+        else:
+            backends.append(("OpenVINO  (pip install openvino)", "openvino"))
+
+        for label, val in backends:
+            ttk.Radiobutton(ctrl, text=label, variable=self.backend_var,
+                            value=val).pack(anchor="w")
 
         # ── Model ──
         section(ctrl, "Model")
@@ -305,24 +323,6 @@ class YoloStreamApp(tk.Tk):
                   orient=tk.HORIZONTAL,
                   command=lambda v: self.skip_label.configure(
                       text=f"N = {int(float(v))}")).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        
-        # ── Backend ──
-        section(ctrl, "Inference backend")
-        hint(ctrl, "ONNX / OpenVINO are faster on CPU than PyTorch")
-
-        backends = [("PyTorch  (default)", "pytorch")]
-        if HAS_ONNX:
-            backends.append(("ONNX Runtime  ✓ installed", "onnx"))
-        else:
-            backends.append(("ONNX Runtime  (pip install onnxruntime)", "onnx"))
-        if HAS_OV:
-            backends.append(("OpenVINO  ✓ installed  [Intel best]", "openvino"))
-        else:
-            backends.append(("OpenVINO  (pip install openvino)", "openvino"))
-
-        for label, val in backends:
-            ttk.Radiobutton(ctrl, text=label, variable=self.backend_var,
-                            value=val).pack(anchor="w")
 
         # ── OpenCV threads ──
         section(ctrl, "OpenCV CPU threads")
