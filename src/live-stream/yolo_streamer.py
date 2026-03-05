@@ -661,8 +661,8 @@ class YoloStreamApp(tk.Tk):
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thick)
                 text = f"{label} {conf_score:.2f}"
                 (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-                cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
-                cv2.putText(annotated, text, (x1 + 2, y1 - 4),
+                cv2.rectangle(annotated, (x1, y2), (x1 + tw + 4, y2 + th + 8), color, -1)
+                cv2.putText(annotated, text, (x1 + 2, y2 + th + 4),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
             # Latency overlay (bottom-left)
