@@ -168,7 +168,7 @@ class YoloStreamApp(tk.Tk):
         self._display_queue: queue.Queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
 
         # ── Tuning variables ──
-        self.confidence   = tk.DoubleVar(value=0.40)
+        self.confidence   = tk.DoubleVar(value=0.50)
         self.imgsz_var    = tk.IntVar(value=320)
         self.skip_var     = tk.IntVar(value=2)          # infer every N frames
         self.cv_threads   = tk.IntVar(value=max(1, CPU_CORES // 2))
@@ -255,24 +255,6 @@ class YoloStreamApp(tk.Tk):
         ttk.Button(ctrl, text="Browse .pt file…",
                    command=self._browse_model).pack(fill=tk.X, pady=4)
 
-        # ── Backend ──
-        section(ctrl, "Inference backend")
-        hint(ctrl, "ONNX / OpenVINO are faster on CPU than PyTorch")
-
-        backends = [("PyTorch  (default)", "pytorch")]
-        if HAS_ONNX:
-            backends.append(("ONNX Runtime  ✓ installed", "onnx"))
-        else:
-            backends.append(("ONNX Runtime  (pip install onnxruntime)", "onnx"))
-        if HAS_OV:
-            backends.append(("OpenVINO  ✓ installed  [Intel best]", "openvino"))
-        else:
-            backends.append(("OpenVINO  (pip install openvino)", "openvino"))
-
-        for label, val in backends:
-            ttk.Radiobutton(ctrl, text=label, variable=self.backend_var,
-                            value=val).pack(anchor="w")
-
         # ── Camera ──
         section(ctrl, "Camera")
         cam_row = ttk.Frame(ctrl)
@@ -284,7 +266,7 @@ class YoloStreamApp(tk.Tk):
         ttk.Button(cam_row, text="↻", width=3,
                    command=self._refresh_cameras).pack(side=tk.LEFT, padx=(4, 0))
 
-        section(ctrl, "Camera resolution")
+        section(ctrl, "Resolution")
         hint(ctrl, "Lower res = faster capture + less resize work")
         res_row = ttk.Frame(ctrl)
         res_row.pack(fill=tk.X)
@@ -323,6 +305,24 @@ class YoloStreamApp(tk.Tk):
                   orient=tk.HORIZONTAL,
                   command=lambda v: self.skip_label.configure(
                       text=f"N = {int(float(v))}")).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        
+        # ── Backend ──
+        section(ctrl, "Inference backend")
+        hint(ctrl, "ONNX / OpenVINO are faster on CPU than PyTorch")
+
+        backends = [("PyTorch  (default)", "pytorch")]
+        if HAS_ONNX:
+            backends.append(("ONNX Runtime  ✓ installed", "onnx"))
+        else:
+            backends.append(("ONNX Runtime  (pip install onnxruntime)", "onnx"))
+        if HAS_OV:
+            backends.append(("OpenVINO  ✓ installed  [Intel best]", "openvino"))
+        else:
+            backends.append(("OpenVINO  (pip install openvino)", "openvino"))
+
+        for label, val in backends:
+            ttk.Radiobutton(ctrl, text=label, variable=self.backend_var,
+                            value=val).pack(anchor="w")
 
         # ── OpenCV threads ──
         section(ctrl, "OpenCV CPU threads")
