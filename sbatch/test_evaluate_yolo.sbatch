@@ -20,14 +20,13 @@ module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 cd $HOME/RobosubCV/model_training/tests
 
-MODELS=[.pt]
-DATASET=[ROBOFLOW_URL]
-OUTPUT_CSV=[OUTPUT_CSV]
+MODELS=$HOME/RobosubCV/results/1-3-models/both-80.pt $HOME/RobosubCV/results/1-3-models/both-45.pt
+DATASET=$HOME/RobosubCV/data/2025-robosub-on-site-2-v1
 
 #	device is, cpu= 1 cpu, 0= 1 GPU, 0,1= 2 GPU
 DEVICE=0,1
 
 poetry install
-poetry run python test_evaluate_yolo.py -m $MODELS -d $DATASET -o $OUTPUT_DIR --device $DEVICE
+poetry run python test_evaluate_yolo.py -m $MODELS -d $DATASET --device $DEVICE
 
 cd $HOME/RobosubCV/sbatch
