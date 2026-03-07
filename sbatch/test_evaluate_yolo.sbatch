@@ -30,3 +30,4 @@ poetry install
 poetry run python test_evaluate_yolo.py -m $MODELS -d $DATASET --device $DEVICE
 
 cd $HOME/RobosubCV/sbatch
+
