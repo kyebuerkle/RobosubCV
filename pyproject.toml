@@ -30,5 +30,6 @@ pythonpath = ["src"]
 addopts = """
     --ignore=src/roboflow_datasets/tests/test_coco_download.py
     --ignore=src/roboflow_datasets/tests/test_yolo_download.py
+    --ignore=src/model_training/tests/test_evaluate_yolo.py
 """
 asset_dir = "assets/test-images"

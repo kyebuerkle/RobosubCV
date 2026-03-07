@@ -71,7 +71,7 @@ def parse_args():
         help="IoU threshold for NMS.",
     )
     parser.add_argument(
-        '-o',"--output", default="yolo_evaluation_results.csv",
+        '-o',"--output", default="output/yolo_evaluation_results.csv",
         metavar="FILE",
         help="Output CSV file path.",
     )
@@ -135,6 +135,8 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
 
 
 def run_evaluation(args):
+    output = Path(args.output).resolve().absolute()
+    output.parent.mkdir(exist_ok=True)
     rows = []
 
     total_runs = len(args.models) * len(args.splits) * len(args.conf)
@@ -201,8 +203,8 @@ def run_evaluation(args):
         col_order.append("error")
     df = df[col_order]
 
-    df.to_csv(args.output, index=False)
-    print(f"\n✅ Results saved to: {args.output}")
+    df.to_csv(output, index=False)
+    print(f"\n✅ Results saved to: {output}")
     print(df.to_string(index=False))
 
 
