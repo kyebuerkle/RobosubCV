@@ -2,10 +2,20 @@
 YOLO Model Evaluation Script
 ------------------------------
 Evaluates one or more YOLO models across train/valid/test splits
-at multiple confidence thresholds, and writes results to a CSV.
+at multiple confidence thresholds, and writes results to two CSVs.
+
+Tested against: ultralytics==8.4.14
+
+Output folder structure:
+    <output_dir>/
+    ├── runs/
+    │   ├── val_model1_conf025/
+    │   └── ...
+    ├── yolo_evaluation_results.csv
+    └── all_object_results.csv
 
 Requirements:
-    pip install ultralytics pandas
+    pip install ultralytics==8.4.14 pandas numpy
 
 Usage examples:
     # Single model, default confidence sweep, all splits
@@ -18,7 +28,7 @@ Usage examples:
         --splits train val test \\
         --conf 0.25,0.50,0.75 \\
         --iou 0.5 \\
-        --output results.csv \\
+        --output output/ \\
         --imgsz 640 \\
         --device 0
 """
@@ -27,6 +37,7 @@ import argparse
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from ultralytics import YOLO
 from general_lib import parse_float_list
@@ -41,14 +52,13 @@ def parse_args():
         description="Evaluate YOLO model(s) across splits and confidence thresholds.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-
     parser.add_argument(
-        '-m',"--models", nargs="+", required=True,
+        "-m", "--models", nargs="+", required=True,
         metavar="PATH",
         help="Path(s) to one or more YOLO .pt model files.",
     )
     parser.add_argument(
-        '-d',"--data", required=True,
+        "-d", "--data", required=True,
         metavar="PATH",
         help="Path to the dataset YAML file.",
     )
@@ -59,11 +69,11 @@ def parse_args():
         help="Dataset splits to evaluate. Choices: train val test.",
     )
     parser.add_argument(
-        '-c', "--conf",
-        default="0.25,0.35,0.45,0.50,0.55,0.65,0.75",
+        "-c", "--conf",
+        default="0.25,0.5,0.75",
         type=parse_float_list,
         metavar="LIST",
-        help="One or more confidence thresholds to sweep (e.g. 0.25,0.5,0.75).",
+        help="Comma-separated confidence thresholds to sweep (e.g. 0.25,0.5,0.75).",
     )
     parser.add_argument(
         "--iou", type=float, default=0.5,
@@ -71,9 +81,9 @@ def parse_args():
         help="IoU threshold for NMS.",
     )
     parser.add_argument(
-        '-o',"--output", default="output/yolo_evaluation_results.csv",
-        metavar="FILE",
-        help="Output CSV file path.",
+        "-o", "--output", default="output",
+        metavar="DIR",
+        help="Output folder. CSVs and runs/ subfolder are written here.",
     )
     parser.add_argument(
         "--imgsz", type=int, default=640,
@@ -85,21 +95,110 @@ def parse_args():
         metavar="DEVICE",
         help='Device to run on: "cpu", "0" (GPU 0), "0,1" (multi-GPU).',
     )
-
     return parser.parse_args()
 
 
 # ─────────────────────────────────────────────
-#  EVALUATION
+#  PER-OBJECT ROW EXTRACTION
+# ─────────────────────────────────────────────
+
+def extract_object_rows(results, model_name: str, split: str,
+                        conf_threshold: float, class_names: dict) -> list[dict]:
+    """
+    Extract per-detection IoU values from validator.metrics.stats.
+
+    In ultralytics 8.4.x, DetectionValidator stores accumulated stats inside
+    the DetMetrics object (validator.metrics), NOT directly on validator.stats.
+
+    validator.metrics.stats is a dict with lists of numpy arrays, one entry
+    per batch, with keys:
+        "tp"         – list of (N, 10) bool arrays  [TP at 10 IoU thresholds]
+        "conf"       – list of (N,)   float arrays  [detection confidence]
+        "pred_cls"   – list of (N,)   int arrays    [predicted class index]
+        "target_cls" – list of (M,)   int arrays    [ground-truth class index]
+        "target_img" – list of unique GT classes per image
+
+    After concatenating across batches:
+        iou50    = tp[:, 0]           (matched at IoU ≥ 0.50)
+        iou50-95 = tp.mean(axis=1)    (mean across 10 thresholds 0.50→0.95)
+    """
+    rows = []
+
+    validator = getattr(results, "validator", None)
+    if validator is None:
+        print("    [warn] no validator attached to results")
+        return rows
+
+    # In 8.4.x stats live on validator.metrics.stats (a DetMetrics object)
+    metrics_obj = getattr(validator, "metrics", None)
+    if metrics_obj is None:
+        print("    [warn] validator has no .metrics attribute")
+        return rows
+
+    stats = getattr(metrics_obj, "stats", None)
+    if not stats:
+        print("    [warn] validator.metrics.stats is empty")
+        return rows
+
+    # Each value is a list of per-batch arrays — concatenate them
+    try:
+        tp_raw   = stats.get("tp",       None)
+        conf_raw = stats.get("conf",     None)
+        cls_raw  = stats.get("pred_cls", None)
+
+        if tp_raw is None or conf_raw is None or cls_raw is None:
+            print(f"    [warn] missing keys in stats. Found keys: {list(stats.keys())}")
+            return rows
+
+        tp   = np.concatenate(tp_raw,   axis=0)   # (N_total, 10)
+        conf = np.concatenate(conf_raw, axis=0)   # (N_total,)
+        cls  = np.concatenate(cls_raw,  axis=0).astype(int)  # (N_total,)
+
+    except Exception as e:
+        print(f"    [warn] could not concatenate stats arrays: {e}")
+        return rows
+
+    if tp.ndim == 1:
+        # Fallback: single IoU threshold stored as 1-D
+        iou50    = tp.astype(float)
+        iou50_95 = tp.astype(float)
+    else:
+        iou50    = tp[:, 0].astype(float)    # IoU threshold = 0.50
+        iou50_95 = tp.mean(axis=1)           # mean over 0.50 : 0.05 : 0.95
+
+    for cls_id, det_conf, i50, i5095 in zip(cls, conf, iou50, iou50_95):
+        obj_name = class_names.get(int(cls_id), f"class_{cls_id}")
+        rows.append({
+            "model":                model_name,
+            "split":                split,
+            "confidence_threshold": conf_threshold,
+            "detection_conf":       round(float(det_conf), 4),
+            "object_name":          obj_name,
+            "object_id":            int(cls_id),
+            "iou50":                round(float(i50),   4),
+            "iou50-95":             round(float(i5095), 4),
+        })
+
+    return rows
+
+
+# ─────────────────────────────────────────────
+#  SINGLE RUN
 # ─────────────────────────────────────────────
 
 def evaluate_model(model_path: str, data_yaml: str, split: str,
-                   conf: float, iou: float, imgsz: int, device: str) -> dict:
+                   conf: float, iou: float, imgsz: int,
+                   device: str, runs_dir: Path) -> tuple[dict, list[dict]]:
     """
     Run YOLO validation for one model / split / confidence combination.
-    Returns a dict of metrics.
+    Returns (summary_dict, list_of_per_object_dicts).
     """
-    model = YOLO(model_path)
+    model      = YOLO(model_path)
+    model_name = Path(model_path).name
+    model_stem = Path(model_path).stem
+
+    # e.g.  val_model1_conf025
+    run_name = f"{split}_{model_stem}_conf{conf:.2f}".replace(".", "")
 
     start = time.perf_counter()
 
@@ -111,19 +210,22 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         imgsz=imgsz,
         device=device,
         verbose=False,
+        project=str(runs_dir),   # → <output>/runs/
+        name=run_name,           # → <output>/runs/<run_name>/
+        exist_ok=True,
     )
 
     elapsed = time.perf_counter() - start
 
-    metrics = results.results_dict
+    # ── Summary metrics ────────────────────────
+    m         = results.results_dict
+    precision = m.get("metrics/precision(B)", float("nan"))
+    recall    = m.get("metrics/recall(B)",    float("nan"))
+    map50     = m.get("metrics/mAP50(B)",     float("nan"))
+    map50_95  = m.get("metrics/mAP50-95(B)",  float("nan"))
 
-    precision = metrics.get("metrics/precision(B)", float("nan"))
-    recall    = metrics.get("metrics/recall(B)",    float("nan"))
-    map50     = metrics.get("metrics/mAP50(B)",     float("nan"))
-    map50_95  = metrics.get("metrics/mAP50-95(B)",  float("nan"))
-
-    return {
-        "model":      Path(model_path).name,
+    summary = {
+        "model":      model_name,
         "split":      split,
         "confidence": conf,
         "time_s":     round(elapsed, 3),
@@ -133,14 +235,29 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         "mAP50-95":   round(map50_95,  4),
     }
 
+    # ── Per-object rows ────────────────────────
+    obj_rows = extract_object_rows(
+        results, model_name, split, conf, model.names
+    )
+
+    return summary, obj_rows
+
+
+# ─────────────────────────────────────────────
+#  MAIN EVALUATION LOOP
+# ─────────────────────────────────────────────
 
 def run_evaluation(args):
-    output = Path(args.output).resolve().absolute()
-    output.parent.mkdir(exist_ok=True)
-    rows = []
+    output_dir = Path(args.output).resolve()
+    runs_dir   = output_dir / "runs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_rows = []
+    object_rows  = []
 
     total_runs = len(args.models) * len(args.splits) * len(args.conf)
-    run_idx = 0
+    run_idx    = 0
 
     for model_path in args.models:
         if not Path(model_path).exists():
@@ -158,7 +275,7 @@ def run_evaluation(args):
                 )
 
                 try:
-                    row = evaluate_model(
+                    summary, obj_rows = evaluate_model(
                         model_path=model_path,
                         data_yaml=args.data,
                         split=split,
@@ -166,19 +283,23 @@ def run_evaluation(args):
                         iou=args.iou,
                         imgsz=args.imgsz,
                         device=args.device,
+                        runs_dir=runs_dir,
                     )
-                    rows.append(row)
+                    summary_rows.append(summary)
+                    object_rows.extend(obj_rows)
+
                     print(
-                        f"P={row['precision']:.3f}  "
-                        f"R={row['recall']:.3f}  "
-                        f"mAP50={row['mAP50']:.3f}  "
-                        f"mAP50-95={row['mAP50-95']:.3f}  "
-                        f"({row['time_s']}s)"
+                        f"P={summary['precision']:.3f}  "
+                        f"R={summary['recall']:.3f}  "
+                        f"mAP50={summary['mAP50']:.3f}  "
+                        f"mAP50-95={summary['mAP50-95']:.3f}  "
+                        f"({summary['time_s']}s)  "
+                        f"[{len(obj_rows)} detections]"
                     )
 
                 except Exception as e:
                     print(f"ERROR: {e}")
-                    rows.append({
+                    summary_rows.append({
                         "model":      Path(model_path).name,
                         "split":      split,
                         "confidence": conf,
@@ -190,22 +311,46 @@ def run_evaluation(args):
                         "error":      str(e),
                     })
 
-    # ── Write CSV ──────────────────────────────
-    if not rows:
-        print("No results to write.")
-        return
+    # ── Write yolo_evaluation_results.csv ─────
+    summary_csv = output_dir / "yolo_evaluation_results.csv"
+    if summary_rows:
+        df_s = pd.DataFrame(summary_rows)
+        col_order = ["model", "split", "confidence", "time_s",
+                     "precision", "recall", "mAP50", "mAP50-95"]
+        if "error" in df_s.columns:
+            col_order.append("error")
+        df_s[col_order].to_csv(summary_csv, index=False)
+        print(f"\n✅ Summary CSV   → {summary_csv}")
+        print(df_s[col_order].to_string(index=False))
+    else:
+        print("No summary results to write.")
 
-    df = pd.DataFrame(rows)
+    # ── Write all_object_results.csv ──────────
+    object_csv = output_dir / "all_object_results.csv"
+    if object_rows:
+        df_o = pd.DataFrame(object_rows)
+        obj_cols = ["model", "split", "confidence_threshold",
+                    "detection_conf", "object_name", "object_id",
+                    "iou50", "iou50-95"]
+        df_o[obj_cols].to_csv(object_csv, index=False)
+        print(f"✅ Object CSV    → {object_csv}  ({len(df_o)} detections)")
+    else:
+        print(
+            "\n⚠️  No per-object data was extracted.\n"
+            "   Run with a single conf threshold and add a quick debug print:\n"
+            "     print(results.validator.metrics.stats.keys())\n"
+            "   to confirm the exact key names on your build."
+        )
 
-    col_order = ["model", "split", "confidence", "time_s",
-                 "precision", "recall", "mAP50", "mAP50-95"]
-    if "error" in df.columns:
-        col_order.append("error")
-    df = df[col_order]
-
-    df.to_csv(output, index=False)
-    print(f"\n✅ Results saved to: {output}")
-    print(df.to_string(index=False))
+    # ── Folder layout ──────────────────────────
+    print(f"""
+Output layout:
+  {output_dir}/
+  ├── runs/
+  │   └── <split>_<model>_conf<X>/   ← one folder per run
+  ├── yolo_evaluation_results.csv
+  └── all_object_results.csv
+""")
 
 
 # ─────────────────────────────────────────────
@@ -215,7 +360,6 @@ def run_evaluation(args):
 if __name__ == "__main__":
     args = parse_args()
 
-    # ── Print run summary ──────────────────────
     print("=" * 60)
     print("YOLO Evaluation")
     print("=" * 60)
@@ -226,7 +370,7 @@ if __name__ == "__main__":
     print(f"  IoU       : {args.iou}")
     print(f"  Image size: {args.imgsz}")
     print(f"  Device    : {args.device}")
-    print(f"  Output    : {args.output}")
+    print(f"  Output dir: {args.output}")
     print("=" * 60 + "\n")
 
     run_evaluation(args)
