@@ -1,23 +1,34 @@
 """
 YOLO Model Evaluation Script
 ------------------------------
-Evaluates one or more YOLO models across train/valid/test splits
-at multiple confidence thresholds, and writes results to two CSVs.
+Evaluates one or more YOLO models across train/valid/test splits.
 
-Tested against: ultralytics==8.4.14
+Two modes
+---------
+1. (Default) Auto-find best confidence via F1 curve from a single discovery
+   pass, then re-run at the optimal threshold.
+2. --conf 0.25,0.50,0.75  Manual sweep of specific confidence values.
 
-Why the callback approach is needed
--------------------------------------
-In 8.4.x, DetectionValidator.get_stats() calls self.metrics.clear_stats()
-before returning, which wipes validator.stats. By the time on_val_end fires
-the data is already gone. Instead we accumulate raw tensors ourselves on
-every on_val_batch_end callback, which fires after each batch's
-update_metrics() call while the data is still alive.
+How per-object stats are captured (8.4.14)
+------------------------------------------
+Call order inside BaseValidator.__call__():
+    for batch in dataloader:
+        update_metrics(preds, batch)          # DetectionValidator appends to
+                                              # validator.metrics.stats (dict of lists)
+        run_callbacks('on_val_batch_end')     # validator.stats is still None here
+    get_stats()                               # calls DetMetrics.process() which does
+                                              # np.concatenate on metrics.stats lists
+                                              # -- lists are consumed/replaced here
+    run_callbacks('on_val_end')               # too late, lists already processed
+
+Solution: monkey-patch validator.metrics.update_stats() during on_val_start
+so we copy each batch's tensors into our own accumulator before they are
+concatenated and replaced by process().
 
 Output folder structure:
     <output_dir>/
     ├── runs/
-    │   ├── val_model1_conf025/
+    │   ├── val_model1_conf0001/
     │   └── ...
     ├── yolo_evaluation_results.csv
     └── all_object_results.csv
@@ -26,19 +37,11 @@ Requirements:
     pip install ultralytics==8.4.14 pandas numpy
 
 Usage examples:
-    # Single model, default confidence sweep, all splits
-    python evaluate_yolo.py --models model1.pt --data dataset/data.yaml
+    # Auto-find best confidence (default)
+    python evaluate_yolo.py -m model1.pt -d dataset/data.yaml
 
-    # Two models, custom confidence levels, specific splits, GPU
-    python evaluate_yolo.py \\
-        --models model1.pt model2.pt \\
-        --data dataset/data.yaml \\
-        --splits train val test \\
-        --conf 0.25,0.50,0.75 \\
-        --iou 0.5 \\
-        --output output/ \\
-        --imgsz 640 \\
-        --device 0
+    # Manual confidence sweep
+    python evaluate_yolo.py -m model1.pt -d dataset/data.yaml --conf 0.25,0.50,0.75
 """
 
 import argparse
@@ -74,14 +77,29 @@ def parse_args():
         "--splits", nargs="+", default=["train", "val", "test"],
         choices=["train", "val", "test"],
         metavar="SPLIT",
-        help="Dataset splits to evaluate. Choices: train val test.",
+        help="Dataset splits to evaluate.",
     )
-    parser.add_argument(
+
+    conf_group = parser.add_mutually_exclusive_group()
+    conf_group.add_argument(
+        "--find-best-conf", action="store_true", default=True,
+        help="(Default) Run a discovery pass and pick the confidence that "
+             "maximises mean F1.",
+    )
+    conf_group.add_argument(
         "-c", "--conf",
-        default="0.25,0.35,0.45,0.50,0.55,0.65,0.75",
+        default=None,
         type=parse_float_list,
         metavar="LIST",
-        help="Comma-separated confidence thresholds to sweep (e.g. 0.25,0.5,0.75).",
+        help="Comma-separated confidence thresholds for a manual sweep. "
+             "Disables --find-best-conf.",
+    )
+
+    parser.add_argument(
+        "--discovery-conf", type=float, default=0.001,
+        metavar="CONF",
+        help="Low confidence used for the F1-discovery pass so all detections "
+             "are visible and the full curve is populated.",
     )
     parser.add_argument(
         "--iou", type=float, default=0.5,
@@ -91,7 +109,7 @@ def parse_args():
     parser.add_argument(
         "-o", "--output", default="output",
         metavar="DIR",
-        help="Output folder. CSVs and runs/ subfolder are written here.",
+        help="Output folder.",
     )
     parser.add_argument(
         "--imgsz", type=int, default=640,
@@ -101,110 +119,101 @@ def parse_args():
     parser.add_argument(
         "--device", default="cpu",
         metavar="DEVICE",
-        help='Device to run on: "cpu", "0" (GPU 0), "0,1" (multi-GPU).',
+        help='Device: "cpu", "0" (GPU 0), "0,1" (multi-GPU).',
     )
     return parser.parse_args()
 
 
 # ─────────────────────────────────────────────
-#  BATCH-LEVEL STAT ACCUMULATOR
+#  STAT ACCUMULATOR
 # ─────────────────────────────────────────────
 
 class StatAccumulator:
     """
-    Accumulates per-detection tensors on every on_val_batch_end callback.
+    Captures per-detection tp/conf/pred_cls by patching
+    validator.metrics.update_stats() during on_val_start.
 
-    In ultralytics 8.4.x, DetectionValidator.update_metrics() appends to
-    self.stats (a dict of lists of Tensors) each batch. The keys are:
-        "tp"       – (N, 10) bool  TP at IoU 0.50 → 0.95
-        "conf"     – (N,)    float detection confidence
-        "pred_cls" – (N,)    int   predicted class index
-        "target_cls"– (M,)   int   ground-truth class index (not used here)
+    DetectionValidator calls validator.metrics.update_stats(batch_stats_dict)
+    once per batch inside update_metrics(). We wrap that method to copy the
+    tensors into our own lists before they are later concatenated and replaced
+    by DetMetrics.process() inside get_stats().
 
-    We grab them here before get_stats() clears them.
+    validator.metrics.stats layout (dict of lists, one entry per batch):
+        "tp"         – (N, 10) bool  TP at IoU 0.50 → 0.95 step 0.05
+        "conf"       – (N,)    float detection confidence score
+        "pred_cls"   – (N,)    int   predicted class index
+        "target_cls" – (M,)    int   ground-truth class index (not used here)
+        "target_img" – (M,)    int   per-image gt class (not used here)
     """
 
     def __init__(self):
-        self.tp_list:   list = []
-        self.conf_list: list = []
-        self.cls_list:  list = []
-        self._keys_printed = False
+        self._tp:   list = []
+        self._conf: list = []
+        self._cls:  list = []
+        self._orig_update_stats = None
 
     def reset(self):
-        self.tp_list   = []
-        self.conf_list = []
-        self.cls_list  = []
+        self._tp   = []
+        self._conf = []
+        self._cls  = []
 
-    def on_val_batch_end(self, validator):
-        """Called after each validation batch. Drain the latest batch stats."""
-        stats = getattr(validator, "stats", None)
-        if stats is None:
-            print(f"\n    [warn] validator.stats doesn't exist")
-            return
+    def install(self, validator):
+        """Monkey-patch validator.metrics.update_stats on on_val_start."""
+        metrics = validator.metrics
+        self._orig_update_stats = metrics.update_stats
 
-        # Print keys once so the user can verify / debug
-        if not self._keys_printed:
-            print(f"\n    [debug] validator.stats keys: {list(stats.keys())}")
-            self._keys_printed = True
+        accumulator = self  # closure reference
 
-        # Each call to update_metrics appends one element to each list.
-        # We pop the last item so we don't double-count on the next batch.
-        tp_list   = stats.get("tp",       [])
-        conf_list = stats.get("conf",     [])
-        cls_list  = stats.get("pred_cls", [])
+        def patched_update_stats(stats_dict):
+            # Call original first so normal bookkeeping still happens
+            accumulator._orig_update_stats(stats_dict)
 
-        if not tp_list:
-            return
-
-        # Take the latest batch entry (last in list)
-        tp   = tp_list[-1]
-        conf = conf_list[-1]
-        cls  = cls_list[-1]
-
-        try:
+            # Now copy the tensors we care about
             import torch
-            if isinstance(tp, torch.Tensor):
-                tp   = tp.cpu().numpy()
-                conf = conf.cpu().numpy()
-                cls  = cls.cpu().numpy()
+            for key, dest in [("tp",       accumulator._tp),
+                               ("conf",     accumulator._conf),
+                               ("pred_cls", accumulator._cls)]:
+                val = stats_dict.get(key)
+                if val is None:
+                    continue
+                if isinstance(val, torch.Tensor):
+                    val = val.cpu().numpy()
+                arr = np.array(val)
+                if arr.size > 0:
+                    dest.append(arr)
 
-            if len(tp) > 0:
-                self.tp_list.append(np.array(tp,   dtype=float))
-                self.conf_list.append(np.array(conf, dtype=float))
-                self.cls_list.append(np.array(cls,  dtype=int))
-        except Exception as e:
-            print(f"    [warn] could not accumulate batch stats: {e}")
+        metrics.update_stats = patched_update_stats
+
+    def uninstall(self, validator):
+        """Restore the original update_stats method."""
+        if self._orig_update_stats is not None:
+            validator.metrics.update_stats = self._orig_update_stats
+            self._orig_update_stats = None
 
     def build_rows(self, model_name: str, split: str,
                    conf_threshold: float, class_names: dict) -> list[dict]:
-        """Convert accumulated tensors into per-detection row dicts."""
-        if not self.tp_list:
+        if not self._tp:
             return []
 
         try:
-            tp   = np.concatenate(self.tp_list,   axis=0)   # (N, 10)
-            conf = np.concatenate(self.conf_list, axis=0)   # (N,)
-            cls  = np.concatenate(self.cls_list,  axis=0)   # (N,)
+            tp   = np.concatenate(self._tp,   axis=0).astype(float)
+            conf = np.concatenate(self._conf, axis=0).astype(float)
+            cls  = np.concatenate(self._cls,  axis=0).astype(int)
         except Exception as e:
-            print(f"    [warn] could not concatenate accumulated stats: {e}")
+            print(f"    [warn] stat concatenation error: {e}")
             return []
 
-        if tp.ndim == 1:
-            iou50    = tp
-            iou50_95 = tp
-        else:
-            iou50    = tp[:, 0]        # matched at IoU ≥ 0.50
-            iou50_95 = tp.mean(axis=1) # mean across 0.50 : 0.05 : 0.95
+        iou50    = tp[:, 0]        if tp.ndim == 2 else tp
+        iou50_95 = tp.mean(axis=1) if tp.ndim == 2 else tp
 
         rows = []
         for cls_id, det_conf, i50, i5095 in zip(cls, conf, iou50, iou50_95):
-            obj_name = class_names.get(int(cls_id), f"class_{cls_id}")
             rows.append({
                 "model":                model_name,
                 "split":                split,
                 "confidence_threshold": conf_threshold,
                 "detection_conf":       round(float(det_conf), 4),
-                "object_name":          obj_name,
+                "object_name":          class_names.get(int(cls_id), f"class_{cls_id}"),
                 "object_id":            int(cls_id),
                 "iou50":                round(float(i50),   4),
                 "iou50-95":             round(float(i5095), 4),
@@ -213,28 +222,54 @@ class StatAccumulator:
 
 
 # ─────────────────────────────────────────────
-#  SINGLE RUN
+#  OPTIMAL CONFIDENCE FROM F1 CURVE
 # ─────────────────────────────────────────────
 
-def evaluate_model(model_path: str, data_yaml: str, split: str,
-                   conf: float, iou: float, imgsz: int,
-                   device: str, runs_dir: Path) -> tuple[dict, list[dict]]:
+def find_optimal_conf(metrics) -> tuple[float, float]:
     """
-    Run YOLO validation for one model / split / confidence combination.
-    Returns (summary_dict, list_of_per_object_dicts).
+    Read the F1-confidence curve built by ap_per_class() inside
+    DetMetrics.process() and return (optimal_conf, peak_mean_f1).
+
+    metrics.box.f1_curve – (nc, 1000) F1 per class over confidence axis
+    metrics.box.px       – (1000,)    confidence axis 0 → 1
     """
-    model      = YOLO(model_path)
-    model_name = Path(model_path).name
-    model_stem = Path(model_path).stem
-    run_name   = f"{split}_{model_stem}_conf{conf:.2f}".replace(".", "")
+    f1_curve = np.array(metrics.box.f1_curve)  # (nc, 1000)
+    px       = np.array(metrics.box.px)         # (1000,)
+    mean_f1  = f1_curve.mean(axis=0)            # (1000,)
+    best_idx = int(mean_f1.argmax())
+    return float(px[best_idx]), float(mean_f1[best_idx])
 
-    # ── Set up per-batch accumulator ──────────
-    accumulator = StatAccumulator()
-    model.add_callback("on_val_batch_end", accumulator.on_val_batch_end)
 
-    # ── Run validation ─────────────────────────
-    start = time.perf_counter()
+# ─────────────────────────────────────────────
+#  SINGLE VAL RUN
+# ─────────────────────────────────────────────
 
+def run_val(model: YOLO, data_yaml: str, split: str,
+            conf: float, iou: float, imgsz: int,
+            device: str, runs_dir: Path,
+            accumulator: StatAccumulator | None = None):
+    """
+    Run model.val() and return (DetMetrics, elapsed_seconds).
+    If accumulator is provided, installs/uninstalls the patch around the run.
+    """
+    model_stem = Path(str(model.model_name)).stem
+    run_name   = f"{split}_{model_stem}_conf{conf:.4f}".replace(".", "")
+
+    if accumulator is not None:
+        accumulator.reset()
+
+        # Install patch via on_val_start (fires after init_metrics sets up
+        # validator.metrics, so the object exists by the time we patch it)
+        def on_val_start(validator):
+            accumulator.install(validator)
+
+        def on_val_end(validator):
+            accumulator.uninstall(validator)
+
+        model.add_callback("on_val_start", on_val_start)
+        model.add_callback("on_val_end",   on_val_end)
+
+    start   = time.perf_counter()
     metrics = model.val(
         data=data_yaml,
         split=split,
@@ -247,35 +282,79 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         name=run_name,
         exist_ok=True,
     )
-
     elapsed = time.perf_counter() - start
 
-    # ── Summary metrics from DetMetrics ───────
-    # model.val() returns DetMetrics directly in 8.4.x
-    precision = float(metrics.box.mp)
-    recall    = float(metrics.box.mr)
-    map50     = float(metrics.box.map50)
-    map50_95  = float(metrics.box.map)
+    # Remove our callbacks so they don't fire on the next run
+    if accumulator is not None:
+        for event, fn in [("on_val_start", on_val_start),
+                          ("on_val_end",   on_val_end)]:
+            model.callbacks[event] = [
+                cb for cb in model.callbacks.get(event, []) if cb is not fn
+            ]
+
+    return metrics, elapsed
+
+
+# ─────────────────────────────────────────────
+#  EVALUATE ONE MODEL / SPLIT / CONF
+# ─────────────────────────────────────────────
+
+def evaluate_combination(model_path: str, data_yaml: str, split: str,
+                         conf: float | None, iou: float, imgsz: int,
+                         device: str, runs_dir: Path,
+                         find_best: bool,
+                         discovery_conf: float) -> tuple[dict, list[dict]]:
+    model      = YOLO(model_path)
+    model_name = Path(model_path).name
+    accum      = StatAccumulator()
+
+    if find_best:
+        # ── Discovery pass (no accumulator needed, just need F1 curve) ────
+        print(f"    Discovery pass (conf={discovery_conf}) ...", end=" ", flush=True)
+        disc_metrics, _ = run_val(
+            model, data_yaml, split,
+            conf=discovery_conf, iou=iou, imgsz=imgsz,
+            device=device, runs_dir=runs_dir,
+        )
+        optimal_conf, peak_f1 = find_optimal_conf(disc_metrics)
+        print(f"optimal conf = {optimal_conf:.4f}  (peak F1 = {peak_f1:.4f})")
+
+        # ── Final pass at optimal conf ─────────────────────────────────────
+        print(f"    Final pass   (conf={optimal_conf:.4f}) ...", end=" ", flush=True)
+        metrics, elapsed = run_val(
+            model, data_yaml, split,
+            conf=optimal_conf, iou=iou, imgsz=imgsz,
+            device=device, runs_dir=runs_dir,
+            accumulator=accum,
+        )
+        used_conf = optimal_conf
+
+    else:
+        metrics, elapsed = run_val(
+            model, data_yaml, split,
+            conf=conf, iou=iou, imgsz=imgsz,
+            device=device, runs_dir=runs_dir,
+            accumulator=accum,
+        )
+        used_conf = conf
 
     summary = {
         "model":      model_name,
         "split":      split,
-        "confidence": conf,
+        "confidence": round(used_conf, 4),
         "time_s":     round(elapsed, 3),
-        "precision":  round(precision, 4),
-        "recall":     round(recall,    4),
-        "mAP50":      round(map50,     4),
-        "mAP50-95":   round(map50_95,  4),
+        "precision":  round(float(metrics.box.mp),    4),
+        "recall":     round(float(metrics.box.mr),    4),
+        "mAP50":      round(float(metrics.box.map50), 4),
+        "mAP50-95":   round(float(metrics.box.map),   4),
     }
 
-    # ── Build per-object rows ──────────────────
-    obj_rows = accumulator.build_rows(model_name, split, conf, model.names)
-
+    obj_rows = accum.build_rows(model_name, split, used_conf, model.names)
     return summary, obj_rows
 
 
 # ─────────────────────────────────────────────
-#  MAIN EVALUATION LOOP
+#  MAIN LOOP
 # ─────────────────────────────────────────────
 
 def run_evaluation(args):
@@ -284,75 +363,80 @@ def run_evaluation(args):
     output_dir.mkdir(parents=True, exist_ok=True)
     runs_dir.mkdir(parents=True, exist_ok=True)
 
+    find_best   = args.conf is None
+    conf_values = args.conf or [None]
+
     summary_rows = []
     object_rows  = []
 
-    total_runs = len(args.models) * len(args.splits) * len(args.conf)
+    combos     = [(m, s, c) for m in args.models
+                             for s in args.splits
+                             for c in conf_values]
+    total_runs = len(combos)
     run_idx    = 0
 
-    for model_path in args.models:
+    for model_path, split, conf in combos:
+        run_idx += 1
         if not Path(model_path).exists():
             print(f"[WARNING] Model not found, skipping: {model_path}")
             continue
 
-        for split in args.splits:
-            for conf in args.conf:
-                run_idx += 1
-                print(
-                    f"[{run_idx}/{total_runs}]  "
-                    f"Model={Path(model_path).name}  "
-                    f"Split={split}  Conf={conf:.2f} ...",
-                    end=" ", flush=True,
-                )
+        mode_label = "auto-F1" if find_best else f"conf={conf:.4f}"
+        print(f"\n[{run_idx}/{total_runs}]  "
+              f"Model={Path(model_path).name}  "
+              f"Split={split}  Mode={mode_label}")
 
-                try:
-                    summary, obj_rows = evaluate_model(
-                        model_path=model_path,
-                        data_yaml=args.data,
-                        split=split,
-                        conf=conf,
-                        iou=args.iou,
-                        imgsz=args.imgsz,
-                        device=args.device,
-                        runs_dir=runs_dir,
-                    )
-                    summary_rows.append(summary)
-                    object_rows.extend(obj_rows)
+        try:
+            summary, obj_rows = evaluate_combination(
+                model_path=model_path,
+                data_yaml=args.data,
+                split=split,
+                conf=conf,
+                iou=args.iou,
+                imgsz=args.imgsz,
+                device=args.device,
+                runs_dir=runs_dir,
+                find_best=find_best,
+                discovery_conf=args.discovery_conf,
+            )
+            summary_rows.append(summary)
+            object_rows.extend(obj_rows)
 
-                    print(
-                        f"P={summary['precision']:.3f}  "
-                        f"R={summary['recall']:.3f}  "
-                        f"mAP50={summary['mAP50']:.3f}  "
-                        f"mAP50-95={summary['mAP50-95']:.3f}  "
-                        f"({summary['time_s']}s)  "
-                        f"[{len(obj_rows)} detections]"
-                    )
+            print(f"    → conf={summary['confidence']}  "
+                  f"P={summary['precision']:.3f}  "
+                  f"R={summary['recall']:.3f}  "
+                  f"mAP50={summary['mAP50']:.3f}  "
+                  f"mAP50-95={summary['mAP50-95']:.3f}  "
+                  f"({summary['time_s']}s)  "
+                  f"[{len(obj_rows)} detections]")
 
-                except Exception as e:
-                    print(f"ERROR: {e}")
-                    summary_rows.append({
-                        "model":      Path(model_path).name,
-                        "split":      split,
-                        "confidence": conf,
-                        "time_s":     float("nan"),
-                        "precision":  float("nan"),
-                        "recall":     float("nan"),
-                        "mAP50":      float("nan"),
-                        "mAP50-95":   float("nan"),
-                        "error":      str(e),
-                    })
+        except Exception as e:
+            import traceback
+            print(f"    ERROR: {e}")
+            traceback.print_exc()
+            summary_rows.append({
+                "model":      Path(model_path).name,
+                "split":      split,
+                "confidence": conf,
+                "time_s":     float("nan"),
+                "precision":  float("nan"),
+                "recall":     float("nan"),
+                "mAP50":      float("nan"),
+                "mAP50-95":   float("nan"),
+                "error":      str(e),
+            })
 
     # ── Write yolo_evaluation_results.csv ─────
     summary_csv = output_dir / "yolo_evaluation_results.csv"
     if summary_rows:
         df_s = pd.DataFrame(summary_rows)
-        col_order = ["model", "split", "confidence", "time_s",
-                     "precision", "recall", "mAP50", "mAP50-95"]
+        cols = ["model", "split", "confidence", "time_s",
+                "precision", "recall", "mAP50", "mAP50-95"]
         if "error" in df_s.columns:
-            col_order.append("error")
-        df_s[col_order].to_csv(summary_csv, index=False)
+            cols.append("error")
+        df_s[cols].to_csv(summary_csv, index=False)
         print(f"\n✅ Summary CSV   → {summary_csv}")
-        print(df_s[col_order].to_string(index=False))
+        print(df_s[cols].to_string(index=False))
     else:
         print("No summary results to write.")
 
@@ -366,17 +450,13 @@ def run_evaluation(args):
         df_o[obj_cols].to_csv(object_csv, index=False)
         print(f"✅ Object CSV    → {object_csv}  ({len(df_o)} detections)")
     else:
-        print(
-            "\n⚠️  No per-object data was extracted.\n"
-            "   Check the [debug] line above for the actual keys in validator.stats\n"
-            "   and update the key names in StatAccumulator.on_val_batch_end()."
-        )
+        print("\n⚠️  No per-object data extracted.")
 
     print(f"""
 Output layout:
   {output_dir}/
   ├── runs/
-  │   └── <split>_<model>_conf<X>/   ← one folder per run
+  │   └── <split>_<model>_conf<X>/
   ├── yolo_evaluation_results.csv
   └── all_object_results.csv
 """)
@@ -388,18 +468,21 @@ Output layout:
 
 if __name__ == "__main__":
     args = parse_args()
+    find_best = args.conf is None
 
     print("=" * 60)
     print("YOLO Evaluation")
     print("=" * 60)
-    print(f"  Models    : {args.models}")
-    print(f"  Data YAML : {args.data}")
-    print(f"  Splits    : {args.splits}")
-    print(f"  Confidence: {args.conf}")
-    print(f"  IoU       : {args.iou}")
-    print(f"  Image size: {args.imgsz}")
-    print(f"  Device    : {args.device}")
-    print(f"  Output dir: {args.output}")
+    print(f"  Models        : {args.models}")
+    print(f"  Data YAML     : {args.data}")
+    print(f"  Splits        : {args.splits}")
+    print(f"  Conf mode     : {'auto (F1-peak)' if find_best else args.conf}")
+    if find_best:
+        print(f"  Discovery conf: {args.discovery_conf}")
+    print(f"  IoU           : {args.iou}")
+    print(f"  Image size    : {args.imgsz}")
+    print(f"  Device        : {args.device}")
+    print(f"  Output dir    : {args.output}")
     print("=" * 60 + "\n")
 
     run_evaluation(args)
