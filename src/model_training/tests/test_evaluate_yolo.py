@@ -6,9 +6,13 @@ at multiple confidence thresholds, and writes results to two CSVs.
 
 Tested against: ultralytics==8.4.14
 
-In 8.4.x model.val() returns a DetMetrics object — the validator itself
-is not attached to it. We capture it via the on_val_end callback, which
-receives the live validator object before it goes out of scope.
+Why the callback approach is needed
+-------------------------------------
+In 8.4.x, DetectionValidator.get_stats() calls self.metrics.clear_stats()
+before returning, which wipes validator.stats. By the time on_val_end fires
+the data is already gone. Instead we accumulate raw tensors ourselves on
+every on_val_batch_end callback, which fires after each batch's
+update_metrics() call while the data is still alive.
 
 Output folder structure:
     <output_dir>/
@@ -25,7 +29,7 @@ Usage examples:
     # Single model, default confidence sweep, all splits
     python evaluate_yolo.py --models model1.pt --data dataset/data.yaml
 
-    # Two models, custom confidence levels, specific splits
+    # Two models, custom confidence levels, specific splits, GPU
     python evaluate_yolo.py \\
         --models model1.pt model2.pt \\
         --data dataset/data.yaml \\
@@ -103,72 +107,109 @@ def parse_args():
 
 
 # ─────────────────────────────────────────────
-#  PER-OBJECT ROW EXTRACTION
+#  BATCH-LEVEL STAT ACCUMULATOR
 # ─────────────────────────────────────────────
 
-def extract_object_rows(validator, model_name: str, split: str,
-                        conf_threshold: float, class_names: dict) -> list[dict]:
+class StatAccumulator:
     """
-    Extract per-detection rows from the validator's stats dict.
+    Accumulates per-detection tensors on every on_val_batch_end callback.
 
-    In ultralytics 8.4.x, BaseValidator accumulates stats on itself
-    (validator.stats) as a dict of lists of per-batch numpy arrays:
+    In ultralytics 8.4.x, DetectionValidator.update_metrics() appends to
+    self.stats (a dict of lists of Tensors) each batch. The keys are:
+        "tp"       – (N, 10) bool  TP at IoU 0.50 → 0.95
+        "conf"     – (N,)    float detection confidence
+        "pred_cls" – (N,)    int   predicted class index
+        "target_cls"– (M,)   int   ground-truth class index (not used here)
 
-        "tp"       – list of (N, 10) bool arrays
-                     TP flags at IoU thresholds 0.50 → 0.95 (step 0.05)
-        "conf"     – list of (N,)   float arrays  detection confidence
-        "pred_cls" – list of (N,)   int   arrays  predicted class index
-
-    We concatenate across batches then derive:
-        iou50    = tp[:, 0]          matched at IoU ≥ 0.50
-        iou50-95 = tp.mean(axis=1)   mean across all 10 thresholds
+    We grab them here before get_stats() clears them.
     """
-    rows = []
 
-    stats = getattr(validator, "stats", None)
-    if not stats:
-        print("    [warn] validator.stats is empty or missing")
+    def __init__(self):
+        self.tp_list:   list = []
+        self.conf_list: list = []
+        self.cls_list:  list = []
+        self._keys_printed = False
+
+    def reset(self):
+        self.tp_list   = []
+        self.conf_list = []
+        self.cls_list  = []
+
+    def on_val_batch_end(self, validator):
+        """Called after each validation batch. Drain the latest batch stats."""
+        stats = getattr(validator, "stats", None)
+        if stats is None:
+            print(f"\n    [warn] validator.stats doesn't exist")
+            return
+
+        # Print keys once so the user can verify / debug
+        if not self._keys_printed:
+            print(f"\n    [debug] validator.stats keys: {list(stats.keys())}")
+            self._keys_printed = True
+
+        # Each call to update_metrics appends one element to each list.
+        # We pop the last item so we don't double-count on the next batch.
+        tp_list   = stats.get("tp",       [])
+        conf_list = stats.get("conf",     [])
+        cls_list  = stats.get("pred_cls", [])
+
+        if not tp_list:
+            return
+
+        # Take the latest batch entry (last in list)
+        tp   = tp_list[-1]
+        conf = conf_list[-1]
+        cls  = cls_list[-1]
+
+        try:
+            import torch
+            if isinstance(tp, torch.Tensor):
+                tp   = tp.cpu().numpy()
+                conf = conf.cpu().numpy()
+                cls  = cls.cpu().numpy()
+
+            if len(tp) > 0:
+                self.tp_list.append(np.array(tp,   dtype=float))
+                self.conf_list.append(np.array(conf, dtype=float))
+                self.cls_list.append(np.array(cls,  dtype=int))
+        except Exception as e:
+            print(f"    [warn] could not accumulate batch stats: {e}")
+
+    def build_rows(self, model_name: str, split: str,
+                   conf_threshold: float, class_names: dict) -> list[dict]:
+        """Convert accumulated tensors into per-detection row dicts."""
+        if not self.tp_list:
+            return []
+
+        try:
+            tp   = np.concatenate(self.tp_list,   axis=0)   # (N, 10)
+            conf = np.concatenate(self.conf_list, axis=0)   # (N,)
+            cls  = np.concatenate(self.cls_list,  axis=0)   # (N,)
+        except Exception as e:
+            print(f"    [warn] could not concatenate accumulated stats: {e}")
+            return []
+
+        if tp.ndim == 1:
+            iou50    = tp
+            iou50_95 = tp
+        else:
+            iou50    = tp[:, 0]        # matched at IoU ≥ 0.50
+            iou50_95 = tp.mean(axis=1) # mean across 0.50 : 0.05 : 0.95
+
+        rows = []
+        for cls_id, det_conf, i50, i5095 in zip(cls, conf, iou50, iou50_95):
+            obj_name = class_names.get(int(cls_id), f"class_{cls_id}")
+            rows.append({
+                "model":                model_name,
+                "split":                split,
+                "confidence_threshold": conf_threshold,
+                "detection_conf":       round(float(det_conf), 4),
+                "object_name":          obj_name,
+                "object_id":            int(cls_id),
+                "iou50":                round(float(i50),   4),
+                "iou50-95":             round(float(i5095), 4),
+            })
         return rows
-
-    tp_raw   = stats.get("tp",       None)
-    conf_raw = stats.get("conf",     None)
-    cls_raw  = stats.get("pred_cls", None)
-
-    # Debug helper — printed only when something is wrong
-    if tp_raw is None or conf_raw is None or cls_raw is None:
-        print(f"    [warn] unexpected stats keys: {list(stats.keys())}")
-        print( "    [hint] edit extract_object_rows() key names to match above")
-        return rows
-
-    try:
-        tp   = np.concatenate(tp_raw,   axis=0).astype(float)  # (N, 10)
-        conf = np.concatenate(conf_raw, axis=0).astype(float)  # (N,)
-        cls  = np.concatenate(cls_raw,  axis=0).astype(int)    # (N,)
-    except Exception as e:
-        print(f"    [warn] could not concatenate stats arrays: {e}")
-        return rows
-
-    if tp.ndim == 1:
-        iou50    = tp
-        iou50_95 = tp
-    else:
-        iou50    = tp[:, 0]        # IoU threshold = 0.50
-        iou50_95 = tp.mean(axis=1) # mean across 0.50 : 0.05 : 0.95
-
-    for cls_id, det_conf, i50, i5095 in zip(cls, conf, iou50, iou50_95):
-        obj_name = class_names.get(int(cls_id), f"class_{cls_id}")
-        rows.append({
-            "model":                model_name,
-            "split":                split,
-            "confidence_threshold": conf_threshold,
-            "detection_conf":       round(float(det_conf), 4),
-            "object_name":          obj_name,
-            "object_id":            int(cls_id),
-            "iou50":                round(float(i50),   4),
-            "iou50-95":             round(float(i5095), 4),
-        })
-
-    return rows
 
 
 # ─────────────────────────────────────────────
@@ -180,23 +221,16 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
                    device: str, runs_dir: Path) -> tuple[dict, list[dict]]:
     """
     Run YOLO validation for one model / split / confidence combination.
-
-    Uses the on_val_end callback to capture the live validator object,
-    because model.val() in 8.4.x returns a DetMetrics object only —
-    the validator is not attached to the return value.
+    Returns (summary_dict, list_of_per_object_dicts).
     """
     model      = YOLO(model_path)
     model_name = Path(model_path).name
     model_stem = Path(model_path).stem
     run_name   = f"{split}_{model_stem}_conf{conf:.2f}".replace(".", "")
 
-    # ── Callback to capture validator ─────────
-    captured = {}
-
-    def on_val_end(validator):
-        captured["validator"] = validator
-
-    model.add_callback("on_val_end", on_val_end)
+    # ── Set up per-batch accumulator ──────────
+    accumulator = StatAccumulator()
+    model.add_callback("on_val_batch_end", accumulator.on_val_batch_end)
 
     # ── Run validation ─────────────────────────
     start = time.perf_counter()
@@ -209,20 +243,19 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         imgsz=imgsz,
         device=device,
         verbose=False,
-        project=str(runs_dir),   # → <output>/runs/
-        name=run_name,           # → <output>/runs/<run_name>/
+        project=str(runs_dir),
+        name=run_name,
         exist_ok=True,
     )
 
     elapsed = time.perf_counter() - start
 
-    # ── Summary metrics ────────────────────────
-    # model.val() returns a DetMetrics object in 8.4.x;
-    # access box metrics directly from it.
-    precision = float(metrics.box.mp)       # mean precision
-    recall    = float(metrics.box.mr)       # mean recall
-    map50     = float(metrics.box.map50)    # mAP@0.50
-    map50_95  = float(metrics.box.map)      # mAP@0.50:0.95
+    # ── Summary metrics from DetMetrics ───────
+    # model.val() returns DetMetrics directly in 8.4.x
+    precision = float(metrics.box.mp)
+    recall    = float(metrics.box.mr)
+    map50     = float(metrics.box.map50)
+    map50_95  = float(metrics.box.map)
 
     summary = {
         "model":      model_name,
@@ -235,15 +268,8 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         "mAP50-95":   round(map50_95,  4),
     }
 
-    # ── Per-object rows via captured validator ─
-    validator = captured.get("validator")
-    if validator is None:
-        print("    [warn] on_val_end callback did not fire — no per-object data")
-        obj_rows = []
-    else:
-        obj_rows = extract_object_rows(
-            validator, model_name, split, conf, model.names
-        )
+    # ── Build per-object rows ──────────────────
+    obj_rows = accumulator.build_rows(model_name, split, conf, model.names)
 
     return summary, obj_rows
 
@@ -342,8 +368,8 @@ def run_evaluation(args):
     else:
         print(
             "\n⚠️  No per-object data was extracted.\n"
-            "   Add this line after model.val() to inspect available keys:\n"
-            "     print(captured['validator'].stats.keys())"
+            "   Check the [debug] line above for the actual keys in validator.stats\n"
+            "   and update the key names in StatAccumulator.on_val_batch_end()."
         )
 
     print(f"""
