@@ -6,6 +6,10 @@ at multiple confidence thresholds, and writes results to two CSVs.
 
 Tested against: ultralytics==8.4.14
 
+In 8.4.x model.val() returns a DetMetrics object — the validator itself
+is not attached to it. We capture it via the on_val_end callback, which
+receives the live validator object before it goes out of scope.
+
 Output folder structure:
     <output_dir>/
     ├── runs/
@@ -70,7 +74,7 @@ def parse_args():
     )
     parser.add_argument(
         "-c", "--conf",
-        default="0.25,0.5,0.75",
+        default="0.25,0.35,0.45,0.50,0.55,0.65,0.75",
         type=parse_float_list,
         metavar="LIST",
         help="Comma-separated confidence thresholds to sweep (e.g. 0.25,0.5,0.75).",
@@ -102,69 +106,54 @@ def parse_args():
 #  PER-OBJECT ROW EXTRACTION
 # ─────────────────────────────────────────────
 
-def extract_object_rows(results, model_name: str, split: str,
+def extract_object_rows(validator, model_name: str, split: str,
                         conf_threshold: float, class_names: dict) -> list[dict]:
     """
-    Extract per-detection IoU values from validator.metrics.stats.
+    Extract per-detection rows from the validator's stats dict.
 
-    In ultralytics 8.4.x, DetectionValidator stores accumulated stats inside
-    the DetMetrics object (validator.metrics), NOT directly on validator.stats.
+    In ultralytics 8.4.x, BaseValidator accumulates stats on itself
+    (validator.stats) as a dict of lists of per-batch numpy arrays:
 
-    validator.metrics.stats is a dict with lists of numpy arrays, one entry
-    per batch, with keys:
-        "tp"         – list of (N, 10) bool arrays  [TP at 10 IoU thresholds]
-        "conf"       – list of (N,)   float arrays  [detection confidence]
-        "pred_cls"   – list of (N,)   int arrays    [predicted class index]
-        "target_cls" – list of (M,)   int arrays    [ground-truth class index]
-        "target_img" – list of unique GT classes per image
+        "tp"       – list of (N, 10) bool arrays
+                     TP flags at IoU thresholds 0.50 → 0.95 (step 0.05)
+        "conf"     – list of (N,)   float arrays  detection confidence
+        "pred_cls" – list of (N,)   int   arrays  predicted class index
 
-    After concatenating across batches:
-        iou50    = tp[:, 0]           (matched at IoU ≥ 0.50)
-        iou50-95 = tp.mean(axis=1)    (mean across 10 thresholds 0.50→0.95)
+    We concatenate across batches then derive:
+        iou50    = tp[:, 0]          matched at IoU ≥ 0.50
+        iou50-95 = tp.mean(axis=1)   mean across all 10 thresholds
     """
     rows = []
 
-    validator = getattr(results, "validator", None)
-    if validator is None:
-        print("    [warn] no validator attached to results")
-        return rows
-
-    # In 8.4.x stats live on validator.metrics.stats (a DetMetrics object)
-    metrics_obj = getattr(validator, "metrics", None)
-    if metrics_obj is None:
-        print("    [warn] validator has no .metrics attribute")
-        return rows
-
-    stats = getattr(metrics_obj, "stats", None)
+    stats = getattr(validator, "stats", None)
     if not stats:
-        print("    [warn] validator.metrics.stats is empty")
+        print("    [warn] validator.stats is empty or missing")
         return rows
 
-    # Each value is a list of per-batch arrays — concatenate them
+    tp_raw   = stats.get("tp",       None)
+    conf_raw = stats.get("conf",     None)
+    cls_raw  = stats.get("pred_cls", None)
+
+    # Debug helper — printed only when something is wrong
+    if tp_raw is None or conf_raw is None or cls_raw is None:
+        print(f"    [warn] unexpected stats keys: {list(stats.keys())}")
+        print( "    [hint] edit extract_object_rows() key names to match above")
+        return rows
+
     try:
-        tp_raw   = stats.get("tp",       None)
-        conf_raw = stats.get("conf",     None)
-        cls_raw  = stats.get("pred_cls", None)
-
-        if tp_raw is None or conf_raw is None or cls_raw is None:
-            print(f"    [warn] missing keys in stats. Found keys: {list(stats.keys())}")
-            return rows
-
-        tp   = np.concatenate(tp_raw,   axis=0)   # (N_total, 10)
-        conf = np.concatenate(conf_raw, axis=0)   # (N_total,)
-        cls  = np.concatenate(cls_raw,  axis=0).astype(int)  # (N_total,)
-
+        tp   = np.concatenate(tp_raw,   axis=0).astype(float)  # (N, 10)
+        conf = np.concatenate(conf_raw, axis=0).astype(float)  # (N,)
+        cls  = np.concatenate(cls_raw,  axis=0).astype(int)    # (N,)
     except Exception as e:
         print(f"    [warn] could not concatenate stats arrays: {e}")
         return rows
 
     if tp.ndim == 1:
-        # Fallback: single IoU threshold stored as 1-D
-        iou50    = tp.astype(float)
-        iou50_95 = tp.astype(float)
+        iou50    = tp
+        iou50_95 = tp
     else:
-        iou50    = tp[:, 0].astype(float)    # IoU threshold = 0.50
-        iou50_95 = tp.mean(axis=1)           # mean over 0.50 : 0.05 : 0.95
+        iou50    = tp[:, 0]        # IoU threshold = 0.50
+        iou50_95 = tp.mean(axis=1) # mean across 0.50 : 0.05 : 0.95
 
     for cls_id, det_conf, i50, i5095 in zip(cls, conf, iou50, iou50_95):
         obj_name = class_names.get(int(cls_id), f"class_{cls_id}")
@@ -191,18 +180,28 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
                    device: str, runs_dir: Path) -> tuple[dict, list[dict]]:
     """
     Run YOLO validation for one model / split / confidence combination.
-    Returns (summary_dict, list_of_per_object_dicts).
+
+    Uses the on_val_end callback to capture the live validator object,
+    because model.val() in 8.4.x returns a DetMetrics object only —
+    the validator is not attached to the return value.
     """
     model      = YOLO(model_path)
     model_name = Path(model_path).name
     model_stem = Path(model_path).stem
+    run_name   = f"{split}_{model_stem}_conf{conf:.2f}".replace(".", "")
 
-    # e.g.  val_model1_conf025
-    run_name = f"{split}_{model_stem}_conf{conf:.2f}".replace(".", "")
+    # ── Callback to capture validator ─────────
+    captured = {}
 
+    def on_val_end(validator):
+        captured["validator"] = validator
+
+    model.add_callback("on_val_end", on_val_end)
+
+    # ── Run validation ─────────────────────────
     start = time.perf_counter()
 
-    results = model.val(
+    metrics = model.val(
         data=data_yaml,
         split=split,
         conf=conf,
@@ -218,11 +217,12 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
     elapsed = time.perf_counter() - start
 
     # ── Summary metrics ────────────────────────
-    m         = results.results_dict
-    precision = m.get("metrics/precision(B)", float("nan"))
-    recall    = m.get("metrics/recall(B)",    float("nan"))
-    map50     = m.get("metrics/mAP50(B)",     float("nan"))
-    map50_95  = m.get("metrics/mAP50-95(B)",  float("nan"))
+    # model.val() returns a DetMetrics object in 8.4.x;
+    # access box metrics directly from it.
+    precision = float(metrics.box.mp)       # mean precision
+    recall    = float(metrics.box.mr)       # mean recall
+    map50     = float(metrics.box.map50)    # mAP@0.50
+    map50_95  = float(metrics.box.map)      # mAP@0.50:0.95
 
     summary = {
         "model":      model_name,
@@ -235,10 +235,15 @@ def evaluate_model(model_path: str, data_yaml: str, split: str,
         "mAP50-95":   round(map50_95,  4),
     }
 
-    # ── Per-object rows ────────────────────────
-    obj_rows = extract_object_rows(
-        results, model_name, split, conf, model.names
-    )
+    # ── Per-object rows via captured validator ─
+    validator = captured.get("validator")
+    if validator is None:
+        print("    [warn] on_val_end callback did not fire — no per-object data")
+        obj_rows = []
+    else:
+        obj_rows = extract_object_rows(
+            validator, model_name, split, conf, model.names
+        )
 
     return summary, obj_rows
 
@@ -337,12 +342,10 @@ def run_evaluation(args):
     else:
         print(
             "\n⚠️  No per-object data was extracted.\n"
-            "   Run with a single conf threshold and add a quick debug print:\n"
-            "     print(results.validator.metrics.stats.keys())\n"
-            "   to confirm the exact key names on your build."
+            "   Add this line after model.val() to inspect available keys:\n"
+            "     print(captured['validator'].stats.keys())"
         )
 
-    # ── Folder layout ──────────────────────────
     print(f"""
 Output layout:
   {output_dir}/
