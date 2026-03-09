@@ -31,6 +31,7 @@ Output folder structure:
     │   ├── val_model1_conf0001/
     │   └── ...
     ├── yolo_evaluation_results.csv
+  ├── per_class_ap.csv
     └── all_object_results.csv
 
 Requirements:
@@ -295,6 +296,42 @@ def run_val(model: YOLO, data_yaml: str, split: str,
     return metrics, elapsed
 
 
+
+# ─────────────────────────────────────────────
+#  PER-CLASS AP EXTRACTION
+# ─────────────────────────────────────────────
+
+def build_ap_rows(metrics, model_name: str, split: str,
+                  conf_threshold: float, class_names: dict) -> list[dict]:
+    """
+    Extract per-class AP50 and AP50-95 from DetMetrics after a val run.
+
+    metrics.box.ap50           – (nc,) AP at IoU 0.50 per class
+    metrics.box.ap             – (nc,) AP averaged over IoU 0.50:0.95 per class
+    metrics.box.ap_class_index – (nc,) integer class indices matching ap50/ap
+    """
+    try:
+        ap50       = np.array(metrics.box.ap50)
+        ap50_95    = np.array(metrics.box.ap)
+        class_idxs = np.array(metrics.box.ap_class_index, dtype=int)
+    except AttributeError as e:
+        print(f"    [warn] could not extract per-class AP: {e}")
+        return []
+
+    rows = []
+    for cls_id, a50, a5095 in zip(class_idxs, ap50, ap50_95):
+        rows.append({
+            "model":      model_name,
+            "split":      split,
+            "confidence": round(conf_threshold, 4),
+            "object_name": class_names.get(int(cls_id), f"class_{cls_id}"),
+            "object_id":  int(cls_id),
+            "AP50":       round(float(a50),   4),
+            "AP50-95":    round(float(a5095), 4),
+        })
+    return rows
+
+
 # ─────────────────────────────────────────────
 #  EVALUATE ONE MODEL / SPLIT / CONF
 # ─────────────────────────────────────────────
@@ -350,7 +387,8 @@ def evaluate_combination(model_path: str, data_yaml: str, split: str,
     }
 
     obj_rows = accum.build_rows(model_name, split, used_conf, model.names)
-    return summary, obj_rows
+    ap_rows  = build_ap_rows(metrics, model_name, split, used_conf, model.names)
+    return summary, obj_rows, ap_rows
 
 
 # ─────────────────────────────────────────────
@@ -368,6 +406,7 @@ def run_evaluation(args):
 
     summary_rows = []
     object_rows  = []
+    ap_rows_all  = []
 
     combos     = [(m, s, c) for m in args.models
                              for s in args.splits
@@ -387,7 +426,7 @@ def run_evaluation(args):
               f"Split={split}  Mode={mode_label}")
 
         try:
-            summary, obj_rows = evaluate_combination(
+            summary, obj_rows, ap_rows = evaluate_combination(
                 model_path=model_path,
                 data_yaml=args.data,
                 split=split,
@@ -401,6 +440,7 @@ def run_evaluation(args):
             )
             summary_rows.append(summary)
             object_rows.extend(obj_rows)
+            ap_rows_all.extend(ap_rows)
 
             print(f"    → conf={summary['confidence']}  "
                   f"P={summary['precision']:.3f}  "
@@ -440,6 +480,17 @@ def run_evaluation(args):
     else:
         print("No summary results to write.")
 
+    # ── Write per_class_ap.csv ───────────────
+    ap_csv = output_dir / "per_class_ap.csv"
+    if ap_rows_all:
+        df_ap = pd.DataFrame(ap_rows_all)
+        ap_cols = ["model", "split", "confidence", "object_name", "object_id",
+                   "AP50", "AP50-95"]
+        df_ap[ap_cols].to_csv(ap_csv, index=False)
+        print(f"✅ Per-class AP  → {ap_csv}  ({len(df_ap)} class entries)")
+    else:
+        print("\n⚠️  No per-class AP data extracted.")
+
     # ── Write all_object_results.csv ──────────
     object_csv = output_dir / "all_object_results.csv"
     if object_rows:
@@ -458,6 +509,7 @@ Output layout:
   ├── runs/
   │   └── <split>_<model>_conf<X>/
   ├── yolo_evaluation_results.csv
+  ├── per_class_ap.csv
   └── all_object_results.csv
 """)
 
