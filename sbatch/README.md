@@ -51,3 +51,22 @@ To get your URL:
 3. Make sure the sected version is the one you want to train
 4. Copy the URL at the top
    1. should look like: `https://app.roboflow.com/WORKSPACE-NAME/PROJECT-NAME/VERSION`
+
+##    tests
+
+The *tests* directory is used for other Slurm Batch scripts for testing Specifications and Requirements during the Verification stage of Capstone.
+
+Discriptions on how to use them are in the Final Project Report, under the Verifications chapter.
+
+The specific reqs and specs that this repo covers is:
+- Spec 1.3.1
+- Spec 1.3.2
+- Req 1.3
+- Spec 1.2.1
+- Req 1.2
+- Req 1.4
+- Spec 1.1.1
+- Req 1.1
+- Obj 1
+  
+(Chronologically in the order the Capstone team tested the specs)
