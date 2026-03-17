@@ -47,7 +47,7 @@ def main(arg_dict, **kwargs):
 
 	resutls = model.train(
 		data 	= yaml_file,                
-		epochs 	= arg_dict.get("epochs", 15),
+		epochs 	= arg_dict.get("epochs", 100),
 		imgsz 	= arg_dict.get("imgsz", 640),
 		patience = arg_dict.get("patience", 10),
 		cache 	= False,

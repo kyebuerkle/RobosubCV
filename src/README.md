@@ -70,3 +70,7 @@ This saves data used in the `dataset_config.py` script that holds the `Config` c
 - saturation: list of % saturation augmentation
 - exposure: list of % exposure augmentation
 - resize: list of % resize / scale augmentation
+
+##		live-stream
+
+This directory is used to present models. It holds the script that runs a GUI that live streams yolo models.
