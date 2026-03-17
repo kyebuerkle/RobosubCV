@@ -10,6 +10,79 @@ from pathlib import Path
 from general_lib import parse_float_list
 from roboflow_datasets import Config, roboflow_login
 
+def _parse_args() -> dict:
+	"""
+	Parses the arguments. Returns dictionary of the arguments (use it to update to not re-write)
+
+	Arguments:
+	-exp/--exposure		comma seperated exposure list
+	-sat/--saturation	comma seperated saturation list
+	-res/--resize		comma seperated resize list
+	-o/--output			output results directory
+	-d/--dataset		dataset save directory
+	"""
+	parser = argparse.ArgumentParser(
+		description="Set up the configuration file for model training",
+		epilog="Use options to only change one portion of the configuration"
+		)
+	
+	parser.add_argument(
+		'-exp', "--exposure",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma seperated list of exposure augmentations"
+		)
+	parser.add_argument(
+		'-sat', "--saturation",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma seperated list of saturation augmentations"
+		)
+	parser.add_argument(
+		'-res', "--resize",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma seperated list of resize augmentations"
+		)
+	parser.add_argument(
+		'-o', "--output",
+		metavar="DIR",
+		type = str,
+		help = "Output directory of the YOLO model results"
+		)
+	parser.add_argument(
+		'-d', "--dataset",
+		metavar="DIR",
+		type = str,
+		help = "directory to save the datasets to"
+		)
+	parser.add_argument(
+		'-p', "--print",
+		action="store_true",
+		help = "prints the configuration.json file"
+		)
+	
+	args = parser.parse_args()
+	ret = {}
+	
+	if (args.exposure):
+		ret["exposure"] = args.exposure
+	if (args.saturation):
+		ret["saturation"] = args.saturation
+	if (args.resize):
+		ret["resize"] = args.resize
+	if (args.output):
+		ret["save"] = Path(args.output).resolve()
+	if (args.dataset):
+		ret["directory"] = Path(args.dataset).resolve()
+	if (args.print):
+		ret["print"] = args.print
+	
+	if not ret:
+		return None
+	else:
+		return ret
+
 def _check_yes(answer: str) -> bool:
 	"""checks if an input is y or yes"""
 	ans = answer.strip().lower()
@@ -17,6 +90,23 @@ def _check_yes(answer: str) -> bool:
 		return True
 	else:
 		return False
+
+def alturnate_main(arg_dict):
+	"""
+	alternate_main is used to update the existing settings, main will overwrite everything
+	"""
+	printing = arg_dict.pop("print", False)
+	if printing:
+		print("Updating configuration.json with these arguments:")
+		print(json.dumps(arg_dict, indent=4))
+
+	config = Config()
+	config.config_dict(arg_dict)
+	config.save_file()
+
+	print("Saved configuration")
+	if printing:
+		print(json.dumps(config.to_dict(), indent=4))
 
 def main():
 	"""
@@ -161,4 +251,8 @@ def main():
 	print(json.dumps(config.to_dict(), indent=4))
 
 if __name__ == "__main__":
-	main()
+	arg_dict = _parse_args()
+	if arg_dict:
+		alturnate_main(arg_dict)
+	else:
+		main()
