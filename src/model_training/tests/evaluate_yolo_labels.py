@@ -228,17 +228,17 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
     """
     Parse the dataset YAML and return the image directory for the given split.
 
-    Handles the standard Roboflow/YOLO layout where the YAML contains:
-        path: /absolute/base/dir
-        train: ../train/images      # relative to 'path', not to the YAML file
+    Handles the standard Roboflow/YOLO layout:
+        path: /dataset/foo                  ← base directory
+        train: ../train/images              ← relative to path's PARENT
         val:   ../valid/images
         test:  ../test/images
 
-    Also handles:
-        - 'valid' as an alias for 'val'
-        - absolute split paths
-        - list-valued split paths (uses first entry)
-        - split paths relative to the YAML file (fallback)
+    Resolution order:
+        1. Absolute path → use directly
+        2. path_parent / raw  (Roboflow standard: ../split/images)
+        3. path_dir    / raw  (alternative: split/images with no ../)
+        4. yaml_dir    / raw  (fallback for older layouts)
     """
     yaml_path = Path(data_yaml_path).resolve()
     with open(yaml_path) as f:
@@ -251,24 +251,31 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
 
     raw = cfg[key]
     if isinstance(raw, list):
-        raw = raw[0]          # use first path if multiple given
+        raw = raw[0]
 
     p = Path(raw)
 
     if p.is_absolute():
         return p.resolve() if p.exists() else None
 
-    # YOLO convention: relative paths are anchored to the 'path' key first
     base = cfg.get("path")
-    if base:
-        candidate = (Path(base) / p).resolve()
-        if candidate.exists():
-            return candidate
 
-    # Fallback: relative to the YAML file's directory
-    candidate = (yaml_path.parent / p).resolve()
-    if candidate.exists():
-        return candidate
+    candidates = []
+    if base:
+        base_path = Path(base)
+        # Roboflow standard: path key is the dataset dir, splits use ../sibling/images
+        # so the true root is path's parent
+        candidates.append(base_path.parent / p)
+        # Also try path / raw directly (no leading ../)
+        candidates.append(base_path / p)
+
+    # Fallback: relative to the YAML file's own directory
+    candidates.append(yaml_path.parent / p)
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.exists():
+            return resolved
 
     return None
 
