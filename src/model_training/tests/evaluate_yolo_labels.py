@@ -109,7 +109,7 @@ def call_evaluate_yolo(args: argparse.Namespace) -> int:
     eval_script = args.eval_script
     if eval_script is None:
         # Default: same directory as this script
-        eval_script = Path(__file__).parent / "test_evaluate_yolo.py"
+        eval_script = Path(__file__).parent / "evaluate_yolo.py"
 
     eval_script = Path(eval_script)
     if not eval_script.exists():
@@ -228,9 +228,17 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
     """
     Parse the dataset YAML and return the image directory for the given split.
 
-    Standard YOLO data YAML keys: train, val, test
-    Values can be absolute paths, relative paths (relative to YAML dir),
-    or a list of paths.
+    Handles the standard Roboflow/YOLO layout where the YAML contains:
+        path: /absolute/base/dir
+        train: ../train/images      # relative to 'path', not to the YAML file
+        val:   ../valid/images
+        test:  ../test/images
+
+    Also handles:
+        - 'valid' as an alias for 'val'
+        - absolute split paths
+        - list-valued split paths (uses first entry)
+        - split paths relative to the YAML file (fallback)
     """
     yaml_path = Path(data_yaml_path).resolve()
     with open(yaml_path) as f:
@@ -246,10 +254,23 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
         raw = raw[0]          # use first path if multiple given
 
     p = Path(raw)
-    if not p.is_absolute():
-        p = yaml_path.parent / p
 
-    return p.resolve() if p.exists() else None
+    if p.is_absolute():
+        return p.resolve() if p.exists() else None
+
+    # YOLO convention: relative paths are anchored to the 'path' key first
+    base = cfg.get("path")
+    if base:
+        candidate = (Path(base) / p).resolve()
+        if candidate.exists():
+            return candidate
+
+    # Fallback: relative to the YAML file's directory
+    candidate = (yaml_path.parent / p).resolve()
+    if candidate.exists():
+        return candidate
+
+    return None
 
 
 def image_dir_to_label_dir(img_dir: Path) -> Path:
