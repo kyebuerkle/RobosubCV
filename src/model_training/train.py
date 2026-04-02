@@ -8,7 +8,7 @@ from roboflow_datasets import robo_arg_parse, Config
 
 def main(arg_dict, **kwargs):
 	arg_dict.update(kwargs)
-	model_file = arg_dict.get("model", None)
+	model_file = arg_dict.get("model", "yolov8m.pt")
 	if not model_file:
 		print("No model selected to train")
 		return False
@@ -47,9 +47,9 @@ def main(arg_dict, **kwargs):
 
 	resutls = model.train(
 		data 	= yaml_file,                
-		epochs 	= arg_dict.get("epochs", 100),
+		epochs 	= arg_dict.get("epochs", 40),
 		imgsz 	= arg_dict.get("imgsz", 640),
-		patience = arg_dict.get("patience", 10),
+		patience = arg_dict.get("patience", 15),
 		cache 	= False,
 		seed 	= arg_dict.get("seed", 17),
 		device 	= arg_dict.get("device", [0,1]),
@@ -59,7 +59,7 @@ def main(arg_dict, **kwargs):
 	return True
 
 if __name__ == "__main__":
-	ret = main(robo_arg_parse(), model = "yolov8m.pt")
+	ret = main(robo_arg_parse())
 	if not ret:
 		print("\n"\
 			"!=======================!\n" \

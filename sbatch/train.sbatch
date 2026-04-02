@@ -23,4 +23,4 @@ source activate $HOME/.conda/envs/Training
 ROBOFLOW_URL=[ROBOFLOW_URL]
 
 poetry install
-poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL 
+poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL

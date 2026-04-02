@@ -1,6 +1,5 @@
 #	@file: dataset_config.py
 #	@brief: this houses the Config class for the entire RobosubCV project
-#	TODO: refactor this for the general_lib... that way I can add multiple dependencies
 
 import roboflow
 import shutil
@@ -26,6 +25,12 @@ class Config:
 	saturation = []
 	exposure = []
 	resize = []
+
+	#	model creation parameters
+	patience = 15
+	epochs = 40
+	device = [0, 1]
+	model = "yolov8m.pt"
 
 	"""--------Private------------"""
 	def __init__(self, args = None, **kwargs):
@@ -132,7 +137,11 @@ class Config:
 				"key" : self.api_key,
 				"saturation" : self.saturation,
 				"exposure" : self.exposure,
-				"resize" : self.resize
+				"resize" : self.resize,
+				"patience" : self.patience,
+				"epochs" : self.epochs,
+				"device" : self.device,
+				"model" : self.model
 			}	
 		return ret
 	
@@ -180,6 +189,14 @@ class Config:
 				self.exposure = val
 			elif (key == "resize"):
 				self.resize = val
+			elif (key == "epochs"):
+				self.epochs = val
+			elif (key == "patience"):
+				self.patience = val
+			elif (key == "device"):
+				self.device = val
+			elif (key == "model"):
+				self.model = val
 
 		if (self.workspace is None) or (self.workspace == ""):
 			return False

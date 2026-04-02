@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 
-from general_lib import parse_float_list
+from general_lib import parse_float_list, parse_int_list
 
 #	@brief: logs into roboflow with api, or user
 #	@param: api_key, when none login with user
@@ -69,6 +69,12 @@ def robo_arg_parse():
 	parser.add_argument('-sat', "--saturation", help="saturation augmentation values, comma seperated eg: 0.5,1,1.75")
 	parser.add_argument('-exp', "--exposure", help="exposure augmentation values, comma seperated eg: 0.5,1,1.75")
 	parser.add_argument('-res', "--resize", help="scale / resize augmentation values, comma seperated eg: 0.5,1,1.75,3")
+	parser.add_argument("--epochs", help="epoch paramter for model training")
+	parser.add_argument("--patience", help="patience paramter for model training")
+	parser.add_argument("--imgsz", help="imgsz parameter for model training")
+	parser.add_argument("--seed", help="seed paramter for model creation")
+	parser.add_argument("--device", help="device paramter for model creation")
+	parser.add_argument("--model", help="model paramter for model training, yolov8m.pt <- medium model, replace the m with n for nano, s for small, l for large, and x for extra large")
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 	arg_dict = vars(args)
@@ -83,5 +89,8 @@ def robo_arg_parse():
 		if key in arg_dict:
 			val = arg_dict.get(key)
 			arg_dict[key] = list(parse_float_list(val))
+	if "device" in arg_dict:
+		val = arg_dict.get("device")
+		arg_dict["device"] = list(parse_int_list(val))
 
 	return arg_dict
