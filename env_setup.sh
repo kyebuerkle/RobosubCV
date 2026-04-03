@@ -1,145 +1,235 @@
 #!/bin/bash
 
-set -e  # exit on error
+# =============================================================================
+#  env_setup.sh — Cross-platform environment setup entry point
+#  Works from:  Linux bash  |  Windows Anaconda PowerShell (via Git Bash/MSYS)
+#
+#  Usage:  bash env_setup.sh [--debug] [--force-cpu] [--env NAME]
+# =============================================================================
 
-DEBUG=1   # 0 = silent (errors only), 1 = verbose
+set -e
+
+# ── Default config ────────────────────────────────────────────────────────────
+DEBUG=1
 ENV_NAME="Training"
 PYTHON_VERSION="3.11"
+FORCE_CPU=0
 
-# log functions if DEBUG = 1
-log() 
-{
-    if [ "$DEBUG" -eq 1 ]; then
-        echo "[INFO] $1"
-    fi
-}
+# ── Argument parsing ──────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --debug)      DEBUG=1 ;;
+        --quiet)      DEBUG=0 ;;
+        --force-cpu)  FORCE_CPU=1 ;;
+        --env)        ENV_NAME="$2"; shift ;;
+        *) echo "[WARN] Unknown argument: $1" ;;
+    esac
+    shift
+done
 
-error() 
-{
-	echo "[ERROR] $1"
-}
+# ── Logging helpers ───────────────────────────────────────────────────────────
+log()   { [ "$DEBUG" -eq 1 ] && echo "[INFO]  $1"; }
+warn()  { echo "[WARN]  $1"; }
+error() { echo "[ERROR] $1"; }
 
 log "========== ENV SETUP START =========="
 
-# go to Anaconda
-if ! command -v conda &> /dev/null; then
-    error "Conda not found. Please install Anaconda/Miniconda."
-    exit 1
-fi
-# Try to locate conda manually if not in PATH
-if ! command -v conda &> /dev/null; then
-    if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-        source "$HOME/anaconda3/etc/profile.d/conda.sh"
-    elif [ -f "/c/Users/$USERNAME/anaconda3/etc/profile.d/conda.sh" ]; then
-        source "/c/Users/$USERNAME/anaconda3/etc/profile.d/conda.sh"
-    else
-        error "Conda not found. Please install or initialize it for bash."
+# ── OS detection ──────────────────────────────────────────────────────────────
+detect_os() {
+    case "$(uname -s)" in
+        Linux*)   echo "linux" ;;
+        Darwin*)  echo "mac" ;;
+        CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
+        *)
+            # Last-resort: check for Windows env vars
+            if [ -n "$WINDIR" ] || [ -n "$SystemRoot" ]; then
+                echo "windows"
+            else
+                echo "unknown"
+            fi
+            ;;
+    esac
+}
+
+OS=$(detect_os)
+log "Detected OS: $OS"
+
+# ── Windows path: delegate to PowerShell script ───────────────────────────────
+if [ "$OS" = "windows" ]; then
+    log "Windows detected — delegating to env_setup.ps1 via PowerShell..."
+
+    # Build the PowerShell script path (same directory as this script)
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PS_SCRIPT="$SCRIPT_DIR/env_setup.ps1"
+
+    if [ ! -f "$PS_SCRIPT" ]; then
+        error "env_setup.ps1 not found in $SCRIPT_DIR"
+        error "Both env_setup.sh and env_setup.ps1 must be in the same directory."
         exit 1
     fi
-else
-    source "$(conda info --base)/etc/profile.d/conda.sh"
+
+    # Convert to Windows path for PowerShell
+    WIN_PATH=$(cygpath -w "$PS_SCRIPT" 2>/dev/null || echo "$PS_SCRIPT" | sed 's|/mnt/\([a-z]\)/|\1:/|;s|/|\\|g')
+
+    PS_ARGS="-EnvName \"$ENV_NAME\" -PythonVersion \"$PYTHON_VERSION\""
+    [ "$DEBUG"     -eq 1 ] && PS_ARGS="$PS_ARGS -Debug"
+    [ "$FORCE_CPU" -eq 1 ] && PS_ARGS="$PS_ARGS -ForceCpu"
+
+    powershell.exe -ExecutionPolicy Bypass -File "$WIN_PATH" \
+        -EnvName "$ENV_NAME" \
+        -PythonVersion "$PYTHON_VERSION" \
+        $([ "$DEBUG"     -eq 1 ] && echo "-Debug") \
+        $([ "$FORCE_CPU" -eq 1 ] && echo "-ForceCpu")
+
+    exit $?
 fi
 
-# create and activate environment
+# =============================================================================
+#  Linux / macOS path — everything below runs natively in bash
+# =============================================================================
+
+# ── Locate & initialise conda ─────────────────────────────────────────────────
+init_conda() {
+    if command -v conda &>/dev/null; then
+        # Already on PATH — just initialise the shell functions
+        CONDA_BASE=$(conda info --base 2>/dev/null)
+    else
+        # Search common install locations
+        local candidates=(
+            "$HOME/anaconda3"
+            "$HOME/miniconda3"
+            "$HOME/opt/anaconda3"
+            "$HOME/opt/miniconda3"
+            "/opt/anaconda3"
+            "/opt/miniconda3"
+        )
+        for dir in "${candidates[@]}"; do
+            if [ -f "$dir/etc/profile.d/conda.sh" ]; then
+                CONDA_BASE="$dir"
+                break
+            fi
+        done
+        if [ -z "$CONDA_BASE" ]; then
+            error "Conda not found. Please install Anaconda or Miniconda."
+            exit 1
+        fi
+    fi
+
+    # shellcheck disable=SC1091
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+    log "Conda initialised from: $CONDA_BASE"
+}
+
+init_conda
+
+# ── Create / reuse conda environment ─────────────────────────────────────────
 log "Checking for conda environment: $ENV_NAME"
-if conda env list | grep -q "^$ENV_NAME "; then
-    log "Environment '$ENV_NAME' exists."
+if conda env list | grep -qE "^${ENV_NAME}\s"; then
+    log "Environment '$ENV_NAME' already exists — skipping creation."
 else
-    log "Creating environment '$ENV_NAME' with Python $PYTHON_VERSION"
-    conda create -n $ENV_NAME python=$PYTHON_VERSION -y || {
-        error "Failed to create conda environment"
+    log "Creating environment '$ENV_NAME' with Python $PYTHON_VERSION..."
+    conda create -n "$ENV_NAME" python="$PYTHON_VERSION" -y || {
+        error "Failed to create conda environment."
         exit 1
     }
 fi
 
-log "Activating environment..."
-conda activate $ENV_NAME || {
-    error "Failed to activate environment"
+log "Activating environment '$ENV_NAME'..."
+conda activate "$ENV_NAME" || {
+    error "Failed to activate environment. Try running: conda init bash"
     exit 1
 }
 
-# checking pip and torch
+# ── pip ───────────────────────────────────────────────────────────────────────
 log "Upgrading pip..."
-pip install --upgrade pip
+pip install --upgrade pip -q
 
-log "Checking for existing torch installation..."
-
-python - <<EOF
-import importlib.util
-exit(0 if importlib.util.find_spec("torch") else 1)
-EOF
-
+# ── Torch detection & install ─────────────────────────────────────────────────
+python - <<'PYEOF'
+import importlib.util, sys
+sys.exit(0 if importlib.util.find_spec("torch") else 1)
+PYEOF
 TORCH_EXISTS=$?
 
-if [ $TORCH_EXISTS -eq 0 ]; then
-    log "Torch already installed. Skipping installation."
+if [ "$TORCH_EXISTS" -eq 0 ]; then
+    log "PyTorch is already installed — skipping."
 else
-    log "Torch not found. Detecting CUDA version..."
-
-    CUDA_VERSION=""
-
-    if command -v nvidia-smi &> /dev/null; then
-        CUDA_VERSION=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}')
-        log "Detected CUDA version: $CUDA_VERSION"
+    if [ "$FORCE_CPU" -eq 1 ]; then
+        warn "--force-cpu flag set. Installing CPU-only PyTorch."
+        CUDA_VERSION=""
     else
-        echo "[WARN] nvidia-smi not found. Cannot detect CUDA."
+        log "Detecting CUDA version..."
+        CUDA_VERSION=""
+
+        # Primary: nvidia-smi
+        if command -v nvidia-smi &>/dev/null; then
+            CUDA_VERSION=$(nvidia-smi 2>/dev/null \
+                | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
+            log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
+        fi
+
+        # Fallback: nvcc
+        if [ -z "$CUDA_VERSION" ] && command -v nvcc &>/dev/null; then
+            CUDA_VERSION=$(nvcc --version 2>/dev/null \
+                | grep -oP "release \K[0-9]+\.[0-9]+" || true)
+            log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+        fi
+
+        [ -z "$CUDA_VERSION" ] && warn "No CUDA detected — will install CPU-only PyTorch."
     fi
 
-    # Install correct torch version
-    if [[ "$CUDA_VERSION" == 12* ]]; then
-        log "Installing PyTorch for CUDA 12.x (cu121)..."
-        pip install torch torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/cu121 || {
-            error "Failed to install cu121 torch"
-            exit 1
-        }
+    install_torch() {
+        local index_url="$1"
+        local label="$2"
+        log "Installing PyTorch ($label)..."
+        if [ -n "$index_url" ]; then
+            pip install torch torchvision torchaudio \
+                --index-url "$index_url" || {
+                error "Failed to install PyTorch ($label)."
+                exit 1
+            }
+        else
+            pip install torch torchvision torchaudio || {
+                error "Failed to install PyTorch (CPU/default)."
+                exit 1
+            }
+        fi
+    }
 
-    elif [[ "$CUDA_VERSION" == 11* ]]; then
-        log "Installing PyTorch for CUDA 11.x (cu118)..."
-        pip install torch torchvision torchaudio \
-            --index-url https://download.pytorch.org/whl/cu118 || {
-            error "Failed to install cu118 torch"
-            exit 1
-        }
-
-    else
-        echo "[WARN] Unknown or no CUDA detected. Installing default torch..."
-        pip install torch torchvision torchaudio || {
-            error "Failed to install default torch"
-            exit 1
-        }
-    fi
+    CUDA_MAJOR="${CUDA_VERSION%%.*}"   # e.g. "12" from "12.1"
+    case "$CUDA_MAJOR" in
+        12) install_torch "https://download.pytorch.org/whl/cu121" "CUDA 12.x → cu121" ;;
+        11) install_torch "https://download.pytorch.org/whl/cu118" "CUDA 11.x → cu118" ;;
+        *)  install_torch "" "CPU / default" ;;
+    esac
 fi
 
-# Verify torch works
-log "Verifying torch installation..."
-
-python - <<EOF
+# ── Verify torch ──────────────────────────────────────────────────────────────
+log "Verifying PyTorch installation..."
+python - <<'PYEOF'
 import torch
-print("Torch version:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-EOF
+print(f"  torch version : {torch.__version__}")
+print(f"  CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"  CUDA version  : {torch.version.cuda}")
+    print(f"  GPU           : {torch.cuda.get_device_name(0)}")
+PYEOF
 
-# Install poetry
-log "Ensuring Poetry is installed..."
-
-if ! command -v poetry &> /dev/null; then
+# ── Poetry ────────────────────────────────────────────────────────────────────
+log "Checking Poetry..."
+if ! command -v poetry &>/dev/null; then
     log "Installing Poetry..."
-    pip install poetry || {
-        error "Failed to install Poetry"
-        exit 1
-    }
+    pip install poetry || { error "Failed to install Poetry."; exit 1; }
 else
     log "Updating Poetry..."
-    pip install --upgrade poetry
+    pip install --upgrade poetry -q
 fi
 
-# Install poetry dependencies
-log "Running poetry install..."
+# Tell Poetry to use the active conda env's Python (avoids venv-inside-venv)
+log "Configuring Poetry to use the current environment..."
+poetry config virtualenvs.create false --local 2>/dev/null || true
 
-poetry install || {
-    error "Poetry install failed"
-    exit 1
-}
+log "Running poetry install..."
+poetry install || { error "poetry install failed."; exit 1; }
 
 log "========== ENV SETUP COMPLETE =========="
