@@ -26,7 +26,19 @@ if ! command -v conda &> /dev/null; then
     error "Conda not found. Please install Anaconda/Miniconda."
     exit 1
 fi
-source "$(conda info --base)/etc/profile.d/conda.sh"
+# Try to locate conda manually if not in PATH
+if ! command -v conda &> /dev/null; then
+    if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+        source "$HOME/anaconda3/etc/profile.d/conda.sh"
+    elif [ -f "/c/Users/$USERNAME/anaconda3/etc/profile.d/conda.sh" ]; then
+        source "/c/Users/$USERNAME/anaconda3/etc/profile.d/conda.sh"
+    else
+        error "Conda not found. Please install or initialize it for bash."
+        exit 1
+    fi
+else
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+fi
 
 # create and activate environment
 log "Checking for conda environment: $ENV_NAME"
