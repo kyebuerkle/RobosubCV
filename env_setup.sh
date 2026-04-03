@@ -6,7 +6,7 @@
 #  On Windows (WSL or Git Bash): delegates to env_setup.ps1 via powershell.exe
 #  On Linux / macOS:             runs natively
 #
-#  Usage:  bash env_setup.sh [--verbose] [--force-cpu] [--env NAME]
+#  Usage:  bash env_setup.sh [-v|--verbose] [-q|--quiet] [--force-cpu] [--env NAME]
 #
 #  Windows users: just run  .\env_setup.ps1  directly in PowerShell instead.
 # ==============================================================================
@@ -22,8 +22,8 @@ FORCE_CPU=0
 # -- Argument parsing ----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --verbose)    VERBOSE=1 ;;
-        --quiet)      VERBOSE=0 ;;
+        -v|--verbose) VERBOSE=1 ;;
+        -q|--quiet)   VERBOSE=0 ;;
         --force-cpu)  FORCE_CPU=1 ;;
         --env)        ENV_NAME="$2"; shift ;;
         *) echo "[WARN]  Unknown argument: $1" ;;
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # -- Logging helpers -----------------------------------------------------------
-log()  { [ "$VERBOSE" -eq 1 ] && echo "[INFO]  $1"; }
+log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
