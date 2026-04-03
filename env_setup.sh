@@ -35,19 +35,22 @@ error() { echo "[ERROR] $1"; }
 log "========== ENV SETUP START =========="
 
 # ── OS detection ──────────────────────────────────────────────────────────────
+# IMPORTANT: Check Windows env vars FIRST.
+# Git Bash / MSYS2 running inside PowerShell reports `uname -s` as "Linux",
+# so uname alone cannot distinguish "real Linux" from "Windows + Git Bash".
+# $WINDIR and $SYSTEMROOT are always set on Windows regardless of the shell.
 detect_os() {
+    # Primary signal: Windows environment variables
+    if [ -n "$WINDIR" ] || [ -n "$SYSTEMROOT" ]; then
+        echo "windows"
+        return
+    fi
+    # Secondary: uname (reliable on true Linux/macOS)
     case "$(uname -s)" in
-        Linux*)   echo "linux" ;;
-        Darwin*)  echo "mac" ;;
+        Darwin*)              echo "mac" ;;
         CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
-        *)
-            # Last-resort: check for Windows env vars
-            if [ -n "$WINDIR" ] || [ -n "$SystemRoot" ]; then
-                echo "windows"
-            else
-                echo "unknown"
-            fi
-            ;;
+        Linux*)               echo "linux" ;;
+        *)                    echo "unknown" ;;
     esac
 }
 
@@ -68,18 +71,25 @@ if [ "$OS" = "windows" ]; then
         exit 1
     fi
 
-    # Convert to Windows path for PowerShell
-    WIN_PATH=$(cygpath -w "$PS_SCRIPT" 2>/dev/null || echo "$PS_SCRIPT" | sed 's|/mnt/\([a-z]\)/|\1:/|;s|/|\\|g')
+    # Convert Unix path to Windows path for PowerShell.
+    # Try cygpath first (Cygwin/MSYS2), then fall back to a sed conversion
+    # that handles both /c/Users/... (Git Bash) and /mnt/c/... (WSL) style paths.
+    if command -v cygpath &>/dev/null; then
+        WIN_PATH=$(cygpath -w "$PS_SCRIPT")
+    else
+        WIN_PATH=$(echo "$PS_SCRIPT" \
+            | sed -E 's|^/([a-zA-Z])/|\1:/|; s|^/mnt/([a-zA-Z])/|\1:/|; s|/|\\|g')
+    fi
+    log "PowerShell script path: $WIN_PATH"
 
-    PS_ARGS="-EnvName \"$ENV_NAME\" -PythonVersion \"$PYTHON_VERSION\""
-    [ "$DEBUG"     -eq 1 ] && PS_ARGS="$PS_ARGS -Debug"
-    [ "$FORCE_CPU" -eq 1 ] && PS_ARGS="$PS_ARGS -ForceCpu"
+    PS_EXTRA_ARGS=()
+    [ "$DEBUG"     -eq 1 ] && PS_EXTRA_ARGS+=("-Debug")
+    [ "$FORCE_CPU" -eq 1 ] && PS_EXTRA_ARGS+=("-ForceCpu")
 
     powershell.exe -ExecutionPolicy Bypass -File "$WIN_PATH" \
         -EnvName "$ENV_NAME" \
         -PythonVersion "$PYTHON_VERSION" \
-        $([ "$DEBUG"     -eq 1 ] && echo "-Debug") \
-        $([ "$FORCE_CPU" -eq 1 ] && echo "-ForceCpu")
+        "${PS_EXTRA_ARGS[@]}"
 
     exit $?
 fi
