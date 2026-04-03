@@ -8,7 +8,12 @@ from roboflow_datasets import robo_arg_parse, Config
 
 def main(arg_dict, **kwargs):
 	arg_dict.update(kwargs)
-	model_file = arg_dict.get("model", "yolov8m.pt")
+	config = Config(arg_dict)
+	if config is None:
+		print("Failed to configure arguments")
+		return False
+	
+	model_file = config.model
 	if not model_file:
 		print("No model selected to train")
 		return False
@@ -18,11 +23,6 @@ def main(arg_dict, **kwargs):
 		if e is FileNotFoundError or e is FileExistsError:
 			print(f"Model file {model_file}, doesn't exist. Use 'yolov8m.pt' for online model")
 			return False
-	
-	config = Config(arg_dict)
-	if config is None:
-		print("Failed to configure arguments")
-		return False
 	
 	config.roboflow_download(format = "yolov8", yes = True)
 	save_dir = config.get_save_dir()
@@ -47,12 +47,12 @@ def main(arg_dict, **kwargs):
 
 	resutls = model.train(
 		data 	= yaml_file,                
-		epochs 	= arg_dict.get("epochs", 40),
+		epochs 	= config.epochs,
 		imgsz 	= arg_dict.get("imgsz", 640),
-		patience = arg_dict.get("patience", 15),
+		patience = config.patience,
 		cache 	= False,
 		seed 	= arg_dict.get("seed", 17),
-		device 	= arg_dict.get("device", [0,1]),
+		device 	= config.device,
 		project = save_dir,
 		)
 	
