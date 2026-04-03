@@ -7,7 +7,7 @@ import roboflow
 import json
 from pathlib import Path
 
-from general_lib import parse_float_list
+from general_lib import parse_float_list, parse_int_list
 from roboflow_datasets import Config, roboflow_login
 
 def _parse_args() -> dict:
@@ -61,6 +61,30 @@ def _parse_args() -> dict:
 		action="store_true",
 		help = "prints the configuration.json file"
 		)
+	parser.add_argument(
+		"--epochs", 
+		metavar="INT",
+		type=int, 
+		help="epoch paramter for model training"
+		)
+	parser.add_argument(
+		"--patience", 
+		metavar="INT", 
+		type=int,
+		help="patience paramter for model training"
+		)
+	parser.add_argument(
+		"--device", 
+		metavar="LIST", 
+		type=parse_int_list, 
+		help="device paramter for model creation"
+		)
+	parser.add_argument(
+		"--model",
+		metavar="YOLO MODEL",
+		type=str,
+		help="model paramter for model training, yolov8m.pt <- medium model, replace the m with n for nano, s for small, l for large, and x for extra large"
+		)
 	
 	args = parser.parse_args()
 	ret = {}
@@ -77,6 +101,14 @@ def _parse_args() -> dict:
 		ret["directory"] = Path(args.dataset).resolve()
 	if (args.print):
 		ret["print"] = args.print
+	if (args.epochs):
+		ret["epochs"] = args.epochs
+	if (args.patience):
+		ret["patience"] = args.patience
+	if (args.device):
+		ret["device"] = args.device
+	if (args.model):
+		ret["model"] = args.model
 	
 	if not ret:
 		return None
