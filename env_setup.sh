@@ -36,6 +36,7 @@ log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
+[ "$VERBOSE" -eq 1 ] && set -x
 log "========== ENV SETUP START =========="
 
 # -- OS detection --------------------------------------------------------------
@@ -167,7 +168,7 @@ conda activate "$ENV_NAME" || {
 
 # -- pip -----------------------------------------------------------------------
 log "Upgrading pip..."
-pip install --upgrade pip -q
+pip install --upgrade pip
 
 # -- PyTorch -------------------------------------------------------------------
 python - <<'PYEOF'
@@ -224,7 +225,7 @@ if ! command -v poetry &>/dev/null; then
     pip install poetry || { err "Failed to install Poetry."; exit 1; }
 else
     log "Updating Poetry..."
-    pip install --upgrade poetry -q
+    pip install --upgrade poetry
 fi
 
 log "Configuring Poetry to use the current environment..."
