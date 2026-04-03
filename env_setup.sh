@@ -171,10 +171,7 @@ log "Upgrading pip..."
 pip install --upgrade pip
 
 # -- PyTorch -------------------------------------------------------------------
-python - <<'PYEOF'
-import importlib.util, sys
-sys.exit(0 if importlib.util.find_spec("torch") else 1)
-PYEOF
+python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)"
 TORCH_EXISTS=$?
 
 if [ "$TORCH_EXISTS" -eq 0 ]; then
@@ -209,14 +206,14 @@ else
 fi
 
 log "Verifying PyTorch..."
-python - <<'PYEOF'
+python -c "
 import torch
-print("  torch version :", torch.__version__)
-print("  CUDA available:", torch.cuda.is_available())
+print('  torch version :', torch.__version__)
+print('  CUDA available:', torch.cuda.is_available())
 if torch.cuda.is_available():
-    print("  CUDA version  :", torch.version.cuda)
-    print("  GPU           :", torch.cuda.get_device_name(0))
-PYEOF
+    print('  CUDA version  :', torch.version.cuda)
+    print('  GPU           :', torch.cuda.get_device_name(0))
+"
 
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
