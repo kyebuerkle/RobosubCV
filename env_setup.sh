@@ -171,8 +171,7 @@ log "Upgrading pip..."
 pip install --upgrade pip
 
 # -- PyTorch -------------------------------------------------------------------
-python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)"
-TORCH_EXISTS=$?
+python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" && TORCH_EXISTS=0 || TORCH_EXISTS=$?
 
 if [ "$TORCH_EXISTS" -eq 0 ]; then
     log "PyTorch already installed - skipping."
