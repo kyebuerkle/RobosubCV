@@ -23,6 +23,7 @@ FORCE_CPU=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--verbose) VERBOSE=1 ;;
+        -vv|--vverbose) VERBOSE=2 ;;
         -q|--quiet)   VERBOSE=0 ;;
         --force-cpu)  FORCE_CPU=1 ;;
         --env)        ENV_NAME="$2"; shift ;;
@@ -32,11 +33,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # -- Logging helpers -----------------------------------------------------------
-log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
+log()  { if [ "$VERBOSE" -ge 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
-[ "$VERBOSE" -eq 1 ] && set -x
+[ "$VERBOSE" -eq 2 ] && set -x
+
 log "========== ENV SETUP START =========="
 
 # -- OS detection --------------------------------------------------------------
