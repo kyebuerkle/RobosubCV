@@ -1,31 +1,41 @@
-# =============================================================================
-#  env_setup.ps1 — Windows / Anaconda PowerShell companion
-#  Called automatically by env_setup.sh when running on Windows.
-#  Can also be run directly:  .\env_setup.ps1
-# =============================================================================
+# ==============================================================================
+#  env_setup.ps1 - Windows / Anaconda environment setup
+#  Run directly from Anaconda PowerShell or standard PowerShell:
+#      .\env_setup.ps1
+#
+#  Optional flags:
+#      -EnvName       Name of the conda environment  (default: Training)
+#      -PythonVersion Python version to use           (default: 3.11)
+#      -ForceCpu      Skip CUDA detection, install CPU-only PyTorch
+#      -Verbose       Print detailed progress logs
+# ==============================================================================
 
 param(
     [string]$EnvName       = "Training",
     [string]$PythonVersion = "3.11",
-    [switch]$Debug,
-    [switch]$ForceCpu
+    [switch]$ForceCpu,
+    [switch]$Verbose
 )
 
 $ErrorActionPreference = "Stop"
 
-# ── Logging helpers ───────────────────────────────────────────────────────────
-function Log   { param($msg) if ($Debug) { Write-Host "[INFO]  $msg" -ForegroundColor Cyan } }
-function Warn  { param($msg) Write-Host "[WARN]  $msg" -ForegroundColor Yellow }
-function Error { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
+# ------------------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------------------
+function Log   { param($m) if ($Verbose) { Write-Host "[INFO]  $m" -ForegroundColor Cyan } }
+function Warn  { param($m) Write-Host "[WARN]  $m" -ForegroundColor Yellow }
+function Err   { param($m) Write-Host "[ERROR] $m" -ForegroundColor Red }
 
-Log "========== ENV SETUP START (PowerShell) =========="
+Log "========== ENV SETUP START =========="
 
-# ── Locate conda ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Locate conda base directory
+# ------------------------------------------------------------------------------
 function Find-CondaBase {
     # 1. Already on PATH
-    $condaCmd = Get-Command conda -ErrorAction SilentlyContinue
-    if ($condaCmd) {
-        $base = conda info --base 2>$null
+    $c = Get-Command conda -ErrorAction SilentlyContinue
+    if ($c) {
+        $base = (conda info --base 2>$null)
         if ($base) { return $base.Trim() }
     }
 
@@ -48,47 +58,53 @@ function Find-CondaBase {
 
 $CondaBase = Find-CondaBase
 if (-not $CondaBase) {
-    Error "Conda not found. Please install Anaconda or Miniconda."
+    Err "Conda not found. Please install Anaconda or Miniconda."
     exit 1
 }
-
 Log "Conda base: $CondaBase"
 
+# ------------------------------------------------------------------------------
 # Initialise conda for this PowerShell session
+# ------------------------------------------------------------------------------
 $condaHook = "$CondaBase\shell\condabin\conda-hook.ps1"
 if (Test-Path $condaHook) {
     & $condaHook
 } else {
-    # Older conda layout
-    $condaInit = "$CondaBase\Scripts\conda.exe"
-    (& $condaInit "shell.powershell" "hook") | Out-String | Invoke-Expression
+    $condaExe = "$CondaBase\Scripts\conda.exe"
+    (& $condaExe "shell.powershell" "hook") | Out-String | Invoke-Expression
 }
 
-# ── Create / reuse conda environment ─────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Create or reuse conda environment
+# ------------------------------------------------------------------------------
 Log "Checking for conda environment: $EnvName"
-$envList = conda env list 2>$null
+$envList = conda env list 2>$null | Out-String
 if ($envList -match "(?m)^${EnvName}\s") {
-    Log "Environment '$EnvName' already exists — skipping creation."
+    Log "Environment '$EnvName' already exists - skipping creation."
 } else {
     Log "Creating environment '$EnvName' with Python $PythonVersion..."
     conda create -n $EnvName python=$PythonVersion -y
-    if ($LASTEXITCODE -ne 0) { Error "Failed to create conda environment."; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Err "Failed to create conda environment."; exit 1 }
 }
 
 Log "Activating environment '$EnvName'..."
 conda activate $EnvName
-if ($LASTEXITCODE -ne 0) { Error "Failed to activate environment."; exit 1 }
+if ($LASTEXITCODE -ne 0) { Err "Failed to activate environment."; exit 1 }
 
-# ── pip ───────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Upgrade pip
+# ------------------------------------------------------------------------------
 Log "Upgrading pip..."
 pip install --upgrade pip -q
 
-# ── Torch detection & install ─────────────────────────────────────────────────
-$torchCheck = python -c "import importlib.util; exit(0 if importlib.util.find_spec('torch') else 1)" 2>$null
-$TorchExists = $LASTEXITCODE -eq 0
+# ------------------------------------------------------------------------------
+# PyTorch - detect existing install
+# ------------------------------------------------------------------------------
+python -c "import importlib.util; exit(0 if importlib.util.find_spec('torch') else 1)" 2>$null
+$TorchExists = ($LASTEXITCODE -eq 0)
 
 if ($TorchExists) {
-    Log "PyTorch is already installed — skipping."
+    Log "PyTorch is already installed - skipping."
 } else {
     $CudaVersion = ""
 
@@ -96,9 +112,9 @@ if ($TorchExists) {
         Log "Detecting CUDA version..."
 
         # Primary: nvidia-smi
-        $nvidiaSmi = Get-Command "nvidia-smi.exe" -ErrorAction SilentlyContinue
-        if ($nvidiaSmi) {
-            $smiOut = & nvidia-smi.exe 2>$null | Out-String
+        $nvSmi = Get-Command "nvidia-smi.exe" -ErrorAction SilentlyContinue
+        if ($nvSmi) {
+            $smiOut = (& nvidia-smi.exe 2>$null) | Out-String
             if ($smiOut -match "CUDA Version:\s+(\d+\.\d+)") {
                 $CudaVersion = $Matches[1]
                 Log "nvidia-smi reports CUDA: $CudaVersion"
@@ -109,7 +125,7 @@ if ($TorchExists) {
         if (-not $CudaVersion) {
             $nvcc = Get-Command "nvcc.exe" -ErrorAction SilentlyContinue
             if ($nvcc) {
-                $nvccOut = & nvcc.exe --version 2>$null | Out-String
+                $nvccOut = (& nvcc.exe --version 2>$null) | Out-String
                 if ($nvccOut -match "release (\d+\.\d+)") {
                     $CudaVersion = $Matches[1]
                     Log "nvcc reports CUDA: $CudaVersion"
@@ -117,60 +133,54 @@ if ($TorchExists) {
             }
         }
 
-        if (-not $CudaVersion) { Warn "No CUDA detected — will install CPU-only PyTorch." }
+        if (-not $CudaVersion) { Warn "No CUDA detected - will install CPU-only PyTorch." }
     } else {
-        Warn "--ForceCpu flag set. Installing CPU-only PyTorch."
+        Warn "-ForceCpu flag set. Installing CPU-only PyTorch."
     }
 
-    $CudaMajor = if ($CudaVersion) { [int]($CudaVersion.Split(".")[0]) } else { 0 }
+    $CudaMajor = 0
+    if ($CudaVersion) { $CudaMajor = [int]($CudaVersion.Split(".")[0]) }
 
-    switch ($CudaMajor) {
-        12 {
-            Log "Installing PyTorch for CUDA 12.x (cu121)..."
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-        }
-        11 {
-            Log "Installing PyTorch for CUDA 11.x (cu118)..."
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-        }
-        default {
-            Log "Installing CPU-only / default PyTorch..."
-            pip install torch torchvision torchaudio
-        }
+    if ($CudaMajor -ge 12) {
+        Log "Installing PyTorch for CUDA 12.x (cu121)..."
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+    } elseif ($CudaMajor -eq 11) {
+        Log "Installing PyTorch for CUDA 11.x (cu118)..."
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    } else {
+        Log "Installing CPU-only PyTorch..."
+        pip install torch torchvision torchaudio
     }
 
-    if ($LASTEXITCODE -ne 0) { Error "Failed to install PyTorch."; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Err "Failed to install PyTorch."; exit 1 }
 }
 
-# ── Verify torch ──────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Verify PyTorch
+# ------------------------------------------------------------------------------
 Log "Verifying PyTorch installation..."
-python -c @"
-import torch
-print(f'  torch version : {torch.__version__}')
-print(f'  CUDA available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'  CUDA version  : {torch.version.cuda}')
-    print(f'  GPU           : {torch.cuda.get_device_name(0)}')
-"@
+python -c "import torch; print('  torch version : ' + torch.__version__); print('  CUDA available: ' + str(torch.cuda.is_available()))"
 
-# ── Poetry ────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Poetry
+# ------------------------------------------------------------------------------
 Log "Checking Poetry..."
 $poetryCmd = Get-Command poetry -ErrorAction SilentlyContinue
 if (-not $poetryCmd) {
     Log "Installing Poetry..."
     pip install poetry
-    if ($LASTEXITCODE -ne 0) { Error "Failed to install Poetry."; exit 1 }
+    if ($LASTEXITCODE -ne 0) { Err "Failed to install Poetry."; exit 1 }
 } else {
     Log "Updating Poetry..."
     pip install --upgrade poetry -q
 }
 
-# Tell Poetry to use the active conda env (no nested venv)
+# Use the active conda env directly - no nested virtualenv
 Log "Configuring Poetry to use the current environment..."
 poetry config virtualenvs.create false --local 2>$null
 
 Log "Running poetry install..."
 poetry install
-if ($LASTEXITCODE -ne 0) { Error "poetry install failed."; exit 1 }
+if ($LASTEXITCODE -ne 0) { Err "poetry install failed."; exit 1 }
 
 Log "========== ENV SETUP COMPLETE =========="
