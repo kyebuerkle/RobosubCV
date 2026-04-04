@@ -23,7 +23,6 @@ FORCE_CPU=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--verbose) VERBOSE=1 ;;
-        -vv|--vverbose) VERBOSE=2 ;;
         -q|--quiet)   VERBOSE=0 ;;
         --force-cpu)  FORCE_CPU=1 ;;
         --env)        ENV_NAME="$2"; shift ;;
@@ -33,12 +32,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # -- Logging helpers -----------------------------------------------------------
-log()  { if [ "$VERBOSE" -ge 1 ]; then echo "[INFO]  $1"; fi; }
+log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
-[ "$VERBOSE" -eq 2 ] && set -x
-
+[ "$VERBOSE" -eq 1 ] && set -x
 log "========== ENV SETUP START =========="
 
 # -- OS detection --------------------------------------------------------------
@@ -172,6 +170,67 @@ conda activate "$ENV_NAME" || {
 log "Upgrading pip..."
 pip install --upgrade pip
 
+# -- CUDA / GPU checks --------------------------------------------------------
+
+# 1. Check nvidia-smi for driver health
+check_nvidia_smi() {
+    if ! command -v nvidia-smi &>/dev/null; then
+        warn "nvidia-smi not found - no NVIDIA GPU or driver detected."
+        return 1
+    fi
+
+    # Capture both stdout and stderr; a broken driver prints to stderr
+    NVSMI_OUT=$(nvidia-smi 2>&1)
+    NVSMI_EXIT=$?
+
+    if [ $NVSMI_EXIT -ne 0 ]; then
+        err "nvidia-smi failed with exit code $NVSMI_EXIT. GPU driver is broken or not loaded."
+        err "Output: $NVSMI_OUT"
+        err "Common causes:"
+        err "  - Driver was updated without a reboot (reboot the machine)"
+        err "  - Driver/library version mismatch (reinstall NVIDIA driver)"
+        err "  - No GPU allocated to this job (check your Slurm --gres= flag)"
+        return 1
+    fi
+
+    # Check for known error strings even on exit 0
+    if echo "$NVSMI_OUT" | grep -qiE "Driver/library version mismatch|Failed to initialize NVML|error:"; then
+        err "nvidia-smi reports a driver error:"
+        err "$NVSMI_OUT"
+        err "The GPU driver needs to be fixed by a system administrator."
+        return 1
+    fi
+
+    log "nvidia-smi OK"
+    return 0
+}
+
+# 2. Ensure nvcc is available, install via conda if missing
+ensure_nvcc() {
+    if command -v nvcc &>/dev/null; then
+        log "nvcc found: $(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)"
+        return 0
+    fi
+
+    warn "nvcc not found. Attempting to install cudatoolkit via conda..."
+    conda install -n "$ENV_NAME" -c conda-forge cudatoolkit -y 2>/dev/null || \
+    conda install -n "$ENV_NAME" cudatoolkit -y 2>/dev/null || {
+        warn "Could not install cudatoolkit via conda. Will rely on nvidia-smi for CUDA version."
+        return 1
+    }
+
+    # Reload PATH so nvcc is visible
+    export PATH="$CONDA_PREFIX/bin:$PATH"
+
+    if command -v nvcc &>/dev/null; then
+        log "nvcc installed: $(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)"
+        return 0
+    else
+        warn "nvcc still not found after install - will rely on nvidia-smi."
+        return 1
+    fi
+}
+
 # -- PyTorch -------------------------------------------------------------------
 python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" && TORCH_EXISTS=0 || TORCH_EXISTS=$?
 
@@ -183,38 +242,37 @@ else
         warn "--force-cpu flag set. Installing CPU-only PyTorch."
     else
         log "Detecting CUDA version..."
+
+        # Check driver health first - exit if broken
         if command -v nvidia-smi &>/dev/null; then
-            CUDA_VERSION=$(nvidia-smi 2>/dev/null \
-                | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
+            if ! check_nvidia_smi; then
+                err "Cannot install GPU PyTorch with a broken driver. Exiting."
+                err "Fix the driver or re-run with --force-cpu to install CPU-only PyTorch."
+                exit 1
+            fi
+            CUDA_VERSION=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
             log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
         fi
-        if [ -z "$CUDA_VERSION" ] && command -v nvcc &>/dev/null; then
-            CUDA_VERSION=$(nvcc --version 2>/dev/null \
-                | grep -oP "release \K[0-9]+\.[0-9]+" || true)
-            log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+
+        # Try nvcc as fallback / confirmation, install if missing
+        if [ -z "$CUDA_VERSION" ]; then
+            ensure_nvcc
+            if command -v nvcc &>/dev/null; then
+                CUDA_VERSION=$(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)
+                log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+            fi
         fi
+
         [ -z "$CUDA_VERSION" ] && warn "No CUDA detected - installing CPU-only PyTorch."
     fi
 
     CUDA_MAJOR="${CUDA_VERSION%%.*}"
     case "$CUDA_MAJOR" in
-        12) pip install torch torchvision torchaudio \
-                --index-url https://download.pytorch.org/whl/cu121 ;;
-        11) pip install torch torchvision torchaudio \
-                --index-url https://download.pytorch.org/whl/cu118 ;;
+        12) pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
+        11) pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
         *)  pip install torch torchvision torchaudio ;;
     esac || { err "Failed to install PyTorch."; exit 1; }
 fi
-
-log "Verifying PyTorch..."
-python -c "
-import torch
-print('  torch version :', torch.__version__)
-print('  CUDA available:', torch.cuda.is_available())
-if torch.cuda.is_available():
-    print('  CUDA version  :', torch.version.cuda)
-    print('  GPU           :', torch.cuda.get_device_name(0))
-"
 
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
@@ -232,4 +290,24 @@ poetry config virtualenvs.create false --local 2>/dev/null || true
 log "Running poetry install..."
 poetry install || { err "poetry install failed."; exit 1; }
 
-log "========== ENV SETUP COMPLETE =========="
+# -- Final summary -------------------------------------------------------------
+echo ""
+echo "========== ENV SETUP COMPLETE =========="
+echo ""
+echo "  Environment : $ENV_NAME"
+python -c "
+import torch
+print('  Torch version:', torch.__version__)
+cuda_ok = torch.cuda.is_available()
+print('  CUDA available:', cuda_ok)
+if cuda_ok:
+    print('  CUDA version :', torch.version.cuda)
+    for i in range(torch.cuda.device_count()):
+        print(f'  GPU {i}          : {torch.cuda.get_device_name(i)}')
+else:
+    print('  GPU            : none (CPU-only mode)')
+"
+echo ""
+echo "  To activate the environment run:"
+echo "    conda activate $ENV_NAME"
+echo "========================================="
