@@ -42,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -v|--verbose) VERBOSE=1 ;;
         -q|--quiet)   VERBOSE=0 ;;
+        -vv|--vverbose) VERBOSE=2 ;;
         --force-cpu)  FORCE_CPU=1 ;;
         --cuda)       FORCE_CUDA="$2"; shift ;;
         --env)        ENV_NAME="$2"; shift ;;
@@ -51,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # -- Logging helpers -----------------------------------------------------------
-log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
+log()  { if [ "$VERBOSE" -ge 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
@@ -172,15 +173,15 @@ init_conda
 log "Checking for conda environment: $ENV_NAME"
 { set +x; } 2>/dev/null
 if conda env list | grep -qE "^${ENV_NAME}\s"; then
-    [ "$VERBOSE" -eq 1 ] && set -x
+    [ "$VERBOSE" -eq 2 ] && set -x
     log "Environment '$ENV_NAME' already exists - skipping creation."
 else
     log "Creating environment '$ENV_NAME' with Python $PYTHON_VERSION..."
     conda create -n "$ENV_NAME" python="$PYTHON_VERSION" -y || {
-        [ "$VERBOSE" -eq 1 ] && set -x
+        [ "$VERBOSE" -eq 2 ] && set -x
         err "Failed to create conda environment."; exit 1
     }
-    [ "$VERBOSE" -eq 1 ] && set -x
+    [ "$VERBOSE" -eq 2 ] && set -x
 fi
 
 log "Activating environment '$ENV_NAME'..."
@@ -191,7 +192,7 @@ conda activate "$ENV_NAME" || {
     err "Failed to activate environment. Try: conda init bash"; exit 1
 }
 # Re-enable tracing after activation is complete
-[ "$VERBOSE" -eq 1 ] && set -x
+[ "$VERBOSE" -eq 2 ] && set -x
 
 # -- pip -----------------------------------------------------------------------
 log "Upgrading pip..."
@@ -262,7 +263,7 @@ ensure_nvcc() {
 # -- PyTorch -------------------------------------------------------------------
 python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" && TORCH_EXISTS=0 || TORCH_EXISTS=$?
 
-if [ "$TORCH_EXISTS" -eq 0 ]; then
+if [[] "$TORCH_EXISTS" -eq 0 && -n "$FORCE_CUDA"]]; then
     log "PyTorch already installed - skipping."
 else
     CUDA_VERSION=""
@@ -326,7 +327,7 @@ if python -c "import ultralytics" &>/dev/null; then
     echo "Ultralytics is installed. Version: $VERSION"
 else
     log "Installing Ultralytics 8.4.8..."
-    pip install --no-dep ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
+    pip install --no-deps ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
 fi
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
