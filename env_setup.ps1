@@ -167,7 +167,7 @@ python -c "import ultralytics; print(ultralytics.__version__)" 2>$null
 if ($LASTEXITCODE -ne 0) 
 { 
 	Log "Installing Ultralytics 8.4.8..."
-	pip install --no-deps ultralytics==8.4.8
+	pip install ultralytics==8.4.8
 	if ($LASTEXITCODE -ne 0) { Err "Failed to install Ultralytics."; exit 1 }
 }
 # ------------------------------------------------------------------------------

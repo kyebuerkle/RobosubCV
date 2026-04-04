@@ -263,7 +263,7 @@ ensure_nvcc() {
 # -- PyTorch -------------------------------------------------------------------
 python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" && TORCH_EXISTS=0 || TORCH_EXISTS=$?
 
-if [[] "$TORCH_EXISTS" -eq 0 && -n "$FORCE_CUDA"]]; then
+if [[ "$TORCH_EXISTS" -eq 0 && -n "$FORCE_CUDA"]]; then
     log "PyTorch already installed - skipping."
 else
     CUDA_VERSION=""
@@ -327,7 +327,7 @@ if python -c "import ultralytics" &>/dev/null; then
     echo "Ultralytics is installed. Version: $VERSION"
 else
     log "Installing Ultralytics 8.4.8..."
-    pip install --no-deps ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
+    pip install ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
 fi
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
