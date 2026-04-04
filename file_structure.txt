@@ -2,7 +2,7 @@ Preparing a MicroSD Card for GoPro and RoboSub Use
 
 Purpose:
 
-This procedure explains how to prepare a MicroSD card for use in a GoPro action camera and for RoboSub dataset collection. It includes instructions for formatting the card, verifying the default GoPro folder structure, and creating the additional folders needed for data collection and preparation.
+This procedure explains how to prepare a MicroSD card for use in a GoPro action camera and for RoboSub dataset collection. It includes formatting the card, verifying the default GoPro folder structure, creating the additional folders needed for data collection and preparation, and copying the data ingestion script from GitHub onto the card.
 
 Warning:
 
@@ -15,6 +15,7 @@ Requirements:
 - Laptop or desktop computer
 - GoPro action camera
 - Charged GoPro battery, if formatting in the camera
+- Access to the team GitHub repository containing the data ingestion script
 
 Recommended Card Note:
 
@@ -77,7 +78,7 @@ After formatting is complete:
 
 RoboSub Competition Folder Structure:
 
-For RoboSub use, an additional dataset folder system should be created on the MicroSD card to support video storage, sorting, and frame extraction.
+For RoboSub use, an additional dataset folder system should be created on the MicroSD card to support video storage, sorting, frame extraction, and data preparation.
 
 The folder structure should be:
 
@@ -87,6 +88,7 @@ RoboSub_Dive_Capture
   raw_videos
   rejected_frames
   renamed_sorted
+  Scripts_RBSTrain
   section_1
   section_2
   section_3
@@ -106,6 +108,7 @@ After formatting:
    raw_videos
    rejected_frames
    renamed_sorted
+   Scripts_RBSTrain
    section_1
    section_2
    section_3
@@ -114,6 +117,15 @@ After formatting:
    section_6
    section_7
 
+Adding the Data Ingestion Script from GitHub:
+
+After the RoboSub_Dive_Capture folder structure has been created:
+1. Open the team GitHub repository containing the data ingestion script
+2. Download or clone the required script files from the repository
+3. Inside RoboSub_Dive_Capture, create a folder called Scripts_RBSTrain
+4. Copy the data_ingestion.py script into the Scripts_RBSTrain folder
+5. Confirm that the script copied successfully
+
 Folder Purpose:
 
 640x480_frames - stores resized extracted frames
@@ -121,15 +133,12 @@ all_objects - stores combined object data
 raw_videos - stores original captured videos
 rejected_frames - stores discarded frames
 renamed_sorted - stores renamed and sorted files
+Scripts_RBSTrain - stores the data ingestion script and related support files
 section_1 through section_7 - used during the data preparation procedure
-
-During the data collection procedure, subfolders should be created inside 640x480_frames and renamed_sorted for each object class captured in the pool.
 
 Naming Convention Notes:
 
-Naming Convention Notes
-
-Use consistent folder names and file names throughout the dataset. Folder names and file names should not contain spaces if they will be used with automated scripts. Spaces can cause parsing problems or require extra handling in scripts.
+Use consistent folder names and file names throughout the dataset. Folder names and file names should not contain spaces if they will be used with automated scripts. Spaces can cause parsing problems or require extra handling in scripts. To reduce the chance of errors, use simple names with letters, numbers, and underscores only. Avoid special characters when possible.
 
 Examples:
 raw_videos
@@ -137,8 +146,25 @@ rejected_frames
 section_1
 yellow_buoy_1.mp4
 green_buoy_2_frame_015.png
+data_ingestion.py
+
+This no-spaces rule also applies to any script files or supporting files copied from GitHub onto the MicroSD card.
 
 Do not rename folders after the folder structure has been created, especially if scripts or later procedures depend on the original names.
+
+During the data collection procedure, subfolders should be created inside 640x480_frames and renamed_sorted for each object class captured in the pool.
+
+Before You Start Checklist:
+
+Before beginning, confirm the following:
+- Any important files on the MicroSD card have been backed up
+- The correct MicroSD card has been selected
+- The GoPro battery is charged if formatting in the camera
+- The MicroSD card is compatible with the GoPro being used
+- A laptop is available for creating the RoboSub folder structure
+- Access to the team GitHub repository is available
+- The required data ingestion script files have been identified
+
 Common Mistakes:
 
 - Formatting the wrong drive by accident
@@ -146,7 +172,9 @@ Common Mistakes:
 - Selecting the wrong file system
 - Forgetting to verify that the GoPro folders were created
 - Placing dataset files outside the required folder structure
+- Using spaces in file names or folder names that will be processed by scripts
 - Renaming folders after scripts or procedures have already been set up
+- Forgetting to copy the required data ingestion script onto the card
 
 Troubleshooting:
 
@@ -156,6 +184,16 @@ If the MicroSD card is not recognized by the GoPro:
 - Format the card again using the GoPro camera if possible
 - Make sure the MicroSD card is compatible with the GoPro model
 
+If the data ingestion script does not work correctly:
+- Confirm that the script file name was not changed
+- Confirm that there are no spaces in folder names or file names
+- Confirm that the script was copied to the correct location
+- Confirm that all required support files from GitHub were also copied
+
+Safe Removal:
+
+After formatting or editing files on the MicroSD card, safely eject the card from the computer before removing it. This helps prevent file corruption.
+
 Expected Result:
 
 After completing this procedure, the MicroSD card should:
@@ -163,4 +201,5 @@ After completing this procedure, the MicroSD card should:
 2. Contain the default GoPro folders DCIM and MISC
 3. Contain the RoboSub_Dive_Capture folder
 4. Contain all required subfolders for data collection and preparation
-5. Be ready for capturing and organizing RoboSub competition footage
+5. Contain the required data ingestion script files if they are meant to travel with the card
+6. Be ready for capturing and organizing RoboSub competition footage
