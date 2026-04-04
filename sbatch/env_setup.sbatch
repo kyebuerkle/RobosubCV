@@ -17,4 +17,6 @@
 #SBATCH --error=./stream-out/%x-%j.err
 
 module load Anaconda3/4.0.0
+echo "Starting"
 bash $HOME/RobosubCV/env_setup.sh
+echo "ending"

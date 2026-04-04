@@ -25,23 +25,14 @@
 #  If running from an HPC login node directly, use --cuda to specify version:
 #    bash env_setup.sh --cuda 13
 #
-#  On slow SSH connections, wrap in screen to survive disconnects:
-#    screen -S setup
-#    bash env_setup.sh
+#  On slow SSH connections, wrap in screen or tmux to survive disconnects:
+#    screen -S setup && bash env_setup.sh
 #    Ctrl+A then D to detach, reconnect with: screen -r setup
 #
 #  Windows users: run  .\env_setup.ps1  directly in PowerShell instead.
 # ==============================================================================
 
 set -e
-
-# -- SSH keepalive -------------------------------------------------------------
-# Prints a dot every 60s to prevent SSH from timing out during long installs.
-if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    ( while true; do sleep 60; echo -n "." 2>/dev/null || true; done ) &
-    KEEPALIVE_PID=$!
-    trap 'kill $KEEPALIVE_PID 2>/dev/null || true' EXIT
-fi
 
 # -- Default config ------------------------------------------------------------
 VERBOSE=0
