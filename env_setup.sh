@@ -233,6 +233,7 @@ check_nvidia_smi() {
 }
 
 # 2. Ensure nvcc is available, install via conda if missing
+# depricated - this always crashed, better to do manually 
 ensure_nvcc() {
     if command -v nvcc &>/dev/null; then
         log "nvcc found: $(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)"
@@ -291,7 +292,7 @@ else
 
             # Try nvcc as fallback / confirmation, install if missing
             if [ -z "$CUDA_VERSION" ]; then
-                ensure_nvcc
+                #ensure_nvcc
                 if command -v nvcc &>/dev/null; then
                     CUDA_VERSION=$(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)
                     log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
@@ -310,13 +311,13 @@ else
     CUDA_MAJOR="${FORCE_CUDA:-${CUDA_VERSION%%.*}}"
     case "$CUDA_MAJOR" in
         13) log "Installing PyTorch for CUDA 13.x (cu130)..."
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 ;;
+            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 ;;
         12) log "Installing PyTorch for CUDA 12.x (cu121)..."
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
+            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
         11) log "Installing PyTorch for CUDA 11.x (cu118)..."
-            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
-        *)  log "Installing CPU-only PyTorch..."
-            pip install torch torchvision torchaudio ;;
+            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
+        *)  log "Installing default PyTorch..."
+            pip install --upgrade torch torchvision torchaudio ;;
     esac || { err "Failed to install PyTorch."; exit 1; }
 fi
 
