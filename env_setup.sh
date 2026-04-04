@@ -326,8 +326,8 @@ if python -c "import ultralytics" &>/dev/null; then
     VERSION=$(python -c "import ultralytics; print(ultralytics.__version__)")
     echo "Ultralytics is installed. Version: $VERSION"
 else
-    log "Installing Ultralytics 8.4.8..."
-    pip install ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
+    log "Installing Ultralytics 8.4 ..."
+    pip install ultralytics || { err "Failed to install Ultralytics."; exit 1; }
 fi
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
