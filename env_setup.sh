@@ -6,18 +6,36 @@
 #  On Windows (WSL or Git Bash): delegates to env_setup.ps1 via powershell.exe
 #  On Linux / macOS:             runs natively
 #
-#  Usage:  bash env_setup.sh [-v|--verbose] [-q|--quiet] [--force-cpu] [--env NAME]
+#  Usage:  bash env_setup.sh [-v|--verbose] [-q|--quiet] [--force-cpu] [--env NAME] [--cuda VERSION]
+#
+#  --cuda VERSION  Skip auto-detection and force a CUDA major version (e.g. --cuda 12)
+#                  Use this on HPC login nodes where GPUs are not accessible.
 #
 #  Windows users: just run  .\env_setup.ps1  directly in PowerShell instead.
+#
+#  On HPC / slow SSH connections, run inside screen or tmux to avoid disconnects:
+#    screen -S setup
+#    bash env_setup.sh --cuda 13
+#    Ctrl+A then D to detach
 # ==============================================================================
 
 set -e
+
+# Prevent SSH keepalive timeouts from killing long pip/conda installs.
+# Works by making the shell periodically print something if SSH is idle.
+if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+    # Send a no-op to stdout every 60s to keep the SSH session alive
+    ( while true; do sleep 60; echo -n "." 2>/dev/null || true; done ) &
+    KEEPALIVE_PID=$!
+    trap 'kill $KEEPALIVE_PID 2>/dev/null || true' EXIT
+fi
 
 # -- Default config ------------------------------------------------------------
 VERBOSE=0
 ENV_NAME="Training"
 PYTHON_VERSION="3.11"
 FORCE_CPU=0
+FORCE_CUDA=""
 
 # -- Argument parsing ----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -25,6 +43,7 @@ while [[ $# -gt 0 ]]; do
         -v|--verbose) VERBOSE=1 ;;
         -q|--quiet)   VERBOSE=0 ;;
         --force-cpu)  FORCE_CPU=1 ;;
+        --cuda)       FORCE_CUDA="$2"; shift ;;
         --env)        ENV_NAME="$2"; shift ;;
         *) echo "[WARN]  Unknown argument: $1" ;;
     esac
@@ -36,7 +55,6 @@ log()  { if [ "$VERBOSE" -eq 1 ]; then echo "[INFO]  $1"; fi; }
 warn() { echo "[WARN]  $1"; }
 err()  { echo "[ERROR] $1"; }
 
-[ "$VERBOSE" -eq 1 ] && set -x
 log "========== ENV SETUP START =========="
 
 # -- OS detection --------------------------------------------------------------
@@ -152,19 +170,28 @@ init_conda
 
 # -- Create / reuse environment ------------------------------------------------
 log "Checking for conda environment: $ENV_NAME"
+{ set +x; } 2>/dev/null
 if conda env list | grep -qE "^${ENV_NAME}\s"; then
+    [ "$VERBOSE" -eq 1 ] && set -x
     log "Environment '$ENV_NAME' already exists - skipping creation."
 else
     log "Creating environment '$ENV_NAME' with Python $PYTHON_VERSION..."
     conda create -n "$ENV_NAME" python="$PYTHON_VERSION" -y || {
+        [ "$VERBOSE" -eq 1 ] && set -x
         err "Failed to create conda environment."; exit 1
     }
+    [ "$VERBOSE" -eq 1 ] && set -x
 fi
 
 log "Activating environment '$ENV_NAME'..."
+# Temporarily disable set -x around conda activate - the activation scripts
+# produce thousands of trace lines that can flood and drop SSH connections.
+{ set +x; } 2>/dev/null
 conda activate "$ENV_NAME" || {
     err "Failed to activate environment. Try: conda init bash"; exit 1
 }
+# Re-enable tracing after activation is complete
+[ "$VERBOSE" -eq 1 ] && set -x
 
 # -- pip -----------------------------------------------------------------------
 log "Upgrading pip..."
@@ -243,34 +270,53 @@ else
     else
         log "Detecting CUDA version..."
 
-        # Check driver health first - exit if broken
-        if command -v nvidia-smi &>/dev/null; then
-            if ! check_nvidia_smi; then
-                err "Cannot install GPU PyTorch with a broken driver. Exiting."
-                err "Fix the driver or re-run with --force-cpu to install CPU-only PyTorch."
-                exit 1
-            fi
-            CUDA_VERSION=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
-            log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
-        fi
+        # If --cuda was passed, skip detection entirely
+        if [ -n "$FORCE_CUDA" ]; then
+            CUDA_VERSION="$FORCE_CUDA.0"
+            log "--cuda flag set: forcing CUDA major version $FORCE_CUDA"
 
-        # Try nvcc as fallback / confirmation, install if missing
-        if [ -z "$CUDA_VERSION" ]; then
-            ensure_nvcc
-            if command -v nvcc &>/dev/null; then
-                CUDA_VERSION=$(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)
-                log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+        else
+            # Check driver health first - exit if broken
+            if command -v nvidia-smi &>/dev/null; then
+                if ! check_nvidia_smi; then
+                    err "Cannot install GPU PyTorch with a broken driver. Exiting."
+                    err "Fix the driver or re-run with --force-cpu to install CPU-only PyTorch."
+                    err "On HPC login nodes without GPU access, use --cuda <version> instead."
+                    err "  e.g.  bash env_setup.sh --cuda 12"
+                    exit 1
+                fi
+                CUDA_VERSION=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
+                log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
+            fi
+
+            # Try nvcc as fallback / confirmation, install if missing
+            if [ -z "$CUDA_VERSION" ]; then
+                ensure_nvcc
+                if command -v nvcc &>/dev/null; then
+                    CUDA_VERSION=$(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)
+                    log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+                fi
+            fi
+
+            if [ -z "$CUDA_VERSION" ]; then
+                warn "No CUDA detected and --cuda not specified."
+                warn "If you are on an HPC login node, re-run with --cuda <version>."
+                warn "  e.g.  bash env_setup.sh --cuda 12"
+                warn "Installing CPU-only PyTorch for now."
             fi
         fi
-
-        [ -z "$CUDA_VERSION" ] && warn "No CUDA detected - installing CPU-only PyTorch."
     fi
 
-    CUDA_MAJOR="${CUDA_VERSION%%.*}"
+    CUDA_MAJOR="${FORCE_CUDA:-${CUDA_VERSION%%.*}}"
     case "$CUDA_MAJOR" in
-        12) pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
-        11) pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
-        *)  pip install torch torchvision torchaudio ;;
+        13) log "Installing PyTorch for CUDA 13.x (cu130)..."
+            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 ;;
+        12) log "Installing PyTorch for CUDA 12.x (cu121)..."
+            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
+        11) log "Installing PyTorch for CUDA 11.x (cu118)..."
+            pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
+        *)  log "Installing CPU-only PyTorch..."
+            pip install torch torchvision torchaudio ;;
     esac || { err "Failed to install PyTorch."; exit 1; }
 fi
 
