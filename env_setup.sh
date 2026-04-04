@@ -6,25 +6,38 @@
 #  On Windows (WSL or Git Bash): delegates to env_setup.ps1 via powershell.exe
 #  On Linux / macOS:             runs natively
 #
-#  Usage:  bash env_setup.sh [-v|--verbose] [-q|--quiet] [--force-cpu] [--env NAME] [--cuda VERSION]
+#  Usage:  bash env_setup.sh [OPTIONS]
 #
-#  --cuda VERSION  Skip auto-detection and force a CUDA major version (e.g. --cuda 12)
-#                  Use this on HPC login nodes where GPUs are not accessible.
+#  Options:
+#    -v, --verbose      Show info logs
+#    -vv, --vverbose    Show all shell tracing (very noisy, avoid over SSH)
+#    -q, --quiet        Suppress info logs (default)
+#    --force-cpu        Install CPU-only PyTorch regardless of GPU
+#    --cuda VERSION     Force a CUDA major version, skips auto-detection and
+#                       reinstalls torch even if already present.
+#                       Use from HPC login nodes or to fix a wrong torch build.
+#                       e.g.  bash env_setup.sh --cuda 13
+#    --env NAME         Conda environment name (default: Training)
 #
-#  Windows users: just run  .\env_setup.ps1  directly in PowerShell instead.
+#  On HPC: prefer running via sbatch so GPUs are allocated and auto-detected:
+#    sbatch env_setup.sbatch
 #
-#  On HPC / slow SSH connections, run inside screen or tmux to avoid disconnects:
-#    screen -S setup
+#  If running from an HPC login node directly, use --cuda to specify version:
 #    bash env_setup.sh --cuda 13
-#    Ctrl+A then D to detach
+#
+#  On slow SSH connections, wrap in screen to survive disconnects:
+#    screen -S setup
+#    bash env_setup.sh
+#    Ctrl+A then D to detach, reconnect with: screen -r setup
+#
+#  Windows users: run  .\env_setup.ps1  directly in PowerShell instead.
 # ==============================================================================
 
 set -e
 
-# Prevent SSH keepalive timeouts from killing long pip/conda installs.
-# Works by making the shell periodically print something if SSH is idle.
+# -- SSH keepalive -------------------------------------------------------------
+# Prints a dot every 60s to prevent SSH from timing out during long installs.
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    # Send a no-op to stdout every 60s to keep the SSH session alive
     ( while true; do sleep 60; echo -n "." 2>/dev/null || true; done ) &
     KEEPALIVE_PID=$!
     trap 'kill $KEEPALIVE_PID 2>/dev/null || true' EXIT
@@ -40,12 +53,12 @@ FORCE_CUDA=""
 # -- Argument parsing ----------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -v|--verbose) VERBOSE=1 ;;
-        -q|--quiet)   VERBOSE=0 ;;
+        -v|--verbose)   VERBOSE=1 ;;
         -vv|--vverbose) VERBOSE=2 ;;
-        --force-cpu)  FORCE_CPU=1 ;;
-        --cuda)       FORCE_CUDA="$2"; shift ;;
-        --env)        ENV_NAME="$2"; shift ;;
+        -q|--quiet)     VERBOSE=0 ;;
+        --force-cpu)    FORCE_CPU=1 ;;
+        --cuda)         FORCE_CUDA="$2"; shift ;;
+        --env)          ENV_NAME="$2"; shift ;;
         *) echo "[WARN]  Unknown argument: $1" ;;
     esac
     shift
@@ -59,27 +72,22 @@ err()  { echo "[ERROR] $1"; }
 log "========== ENV SETUP START =========="
 
 # -- OS detection --------------------------------------------------------------
-# There are three "bash running on Windows" scenarios, all of which should
-# delegate to PowerShell rather than try to find a Windows conda from bash:
-#
+# Three "bash on Windows" cases all need to delegate to PowerShell:
 #   Git Bash / MSYS2  -> $WINDIR is set, uname says "Linux" or MINGW*
 #   WSL               -> uname says "Linux", /proc/version has "microsoft"
 #   Cygwin            -> uname says CYGWIN*
-#
 detect_os() {
-    # Git Bash / MSYS2
     if [ -n "$WINDIR" ] || [ -n "$SYSTEMROOT" ]; then
         echo "windows"; return
     fi
-    # WSL (kernel string contains Microsoft or WSL)
     if [ -f /proc/version ] && grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
         echo "wsl"; return
     fi
     case "$(uname -s)" in
-        Darwin*)              echo "mac" ;;
-        CYGWIN*|MINGW*|MSYS*) echo "windows" ;;
-        Linux*)               echo "linux" ;;
-        *)                    echo "unknown" ;;
+        Darwin*)               echo "mac" ;;
+        CYGWIN*|MINGW*|MSYS*)  echo "windows" ;;
+        Linux*)                echo "linux" ;;
+        *)                     echo "unknown" ;;
     esac
 }
 
@@ -91,12 +99,11 @@ if [ "$OS" = "windows" ] || [ "$OS" = "wsl" ]; then
     if [ "$OS" = "wsl" ]; then
         warn "Running inside WSL. Delegating to Windows PowerShell so conda"
         warn "can find your Windows Anaconda installation."
-        warn "Tip: you can also just run  .\\env_setup.ps1  directly in PowerShell."
+        warn "Tip: run  .\\env_setup.ps1  directly in PowerShell instead."
     else
         log "Windows (Git Bash) detected. Delegating to env_setup.ps1..."
     fi
 
-    # Locate env_setup.ps1 relative to this script
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     PS_SCRIPT="$SCRIPT_DIR/env_setup.ps1"
 
@@ -106,11 +113,9 @@ if [ "$OS" = "windows" ] || [ "$OS" = "wsl" ]; then
         exit 1
     fi
 
-    # Convert the Unix path to a Windows path for powershell.exe
     if command -v cygpath &>/dev/null; then
         WIN_PATH=$(cygpath -w "$PS_SCRIPT")
     elif [ "$OS" = "wsl" ]; then
-        # WSL path: /home/... or /mnt/c/... -> use wslpath if available
         if command -v wslpath &>/dev/null; then
             WIN_PATH=$(wslpath -w "$PS_SCRIPT")
         else
@@ -122,10 +127,10 @@ if [ "$OS" = "windows" ] || [ "$OS" = "wsl" ]; then
 
     log "PowerShell script path: $WIN_PATH"
 
-    # Build optional flag array cleanly (safe with set -e)
     PS_EXTRA_ARGS=()
-    [ "$VERBOSE"   -eq 1 ] && PS_EXTRA_ARGS+=("-Verbose")
+    [ "$VERBOSE"   -ge 1 ] && PS_EXTRA_ARGS+=("-Verbose")
     [ "$FORCE_CPU" -eq 1 ] && PS_EXTRA_ARGS+=("-ForceCpu")
+    [ -n "$FORCE_CUDA" ]   && PS_EXTRA_ARGS+=("-ForceCuda" "$FORCE_CUDA")
 
     powershell.exe -ExecutionPolicy Bypass -File "$WIN_PATH" \
         -EnvName "$ENV_NAME" \
@@ -171,57 +176,52 @@ init_conda
 
 # -- Create / reuse environment ------------------------------------------------
 log "Checking for conda environment: $ENV_NAME"
+# Suppress tracing around conda calls - they produce thousands of lines
+# of shell trace output that can flood and drop SSH connections.
 { set +x; } 2>/dev/null
 if conda env list | grep -qE "^${ENV_NAME}\s"; then
-    [ "$VERBOSE" -eq 2 ] && set -x
+    [ "$VERBOSE" -ge 2 ] && set -x
     log "Environment '$ENV_NAME' already exists - skipping creation."
 else
     log "Creating environment '$ENV_NAME' with Python $PYTHON_VERSION..."
     conda create -n "$ENV_NAME" python="$PYTHON_VERSION" -y || {
-        [ "$VERBOSE" -eq 2 ] && set -x
+        [ "$VERBOSE" -ge 2 ] && set -x
         err "Failed to create conda environment."; exit 1
     }
-    [ "$VERBOSE" -eq 2 ] && set -x
+    [ "$VERBOSE" -ge 2 ] && set -x
 fi
 
 log "Activating environment '$ENV_NAME'..."
-# Temporarily disable set -x around conda activate - the activation scripts
-# produce thousands of trace lines that can flood and drop SSH connections.
 { set +x; } 2>/dev/null
 conda activate "$ENV_NAME" || {
     err "Failed to activate environment. Try: conda init bash"; exit 1
 }
-# Re-enable tracing after activation is complete
-[ "$VERBOSE" -eq 2 ] && set -x
+[ "$VERBOSE" -ge 2 ] && set -x
 
 # -- pip -----------------------------------------------------------------------
 log "Upgrading pip..."
 pip install --upgrade pip
 
-# -- CUDA / GPU checks --------------------------------------------------------
-
-# 1. Check nvidia-smi for driver health
+# -- CUDA / GPU health check ---------------------------------------------------
 check_nvidia_smi() {
     if ! command -v nvidia-smi &>/dev/null; then
         warn "nvidia-smi not found - no NVIDIA GPU or driver detected."
         return 1
     fi
 
-    # Capture both stdout and stderr; a broken driver prints to stderr
     NVSMI_OUT=$(nvidia-smi 2>&1)
     NVSMI_EXIT=$?
 
     if [ $NVSMI_EXIT -ne 0 ]; then
-        err "nvidia-smi failed with exit code $NVSMI_EXIT. GPU driver is broken or not loaded."
+        err "nvidia-smi failed (exit $NVSMI_EXIT). GPU driver is broken or not loaded."
         err "Output: $NVSMI_OUT"
         err "Common causes:"
-        err "  - Driver was updated without a reboot (reboot the machine)"
-        err "  - Driver/library version mismatch (reinstall NVIDIA driver)"
-        err "  - No GPU allocated to this job (check your Slurm --gres= flag)"
+        err "  - Driver updated without a reboot -> reboot the machine"
+        err "  - Driver/library version mismatch -> reinstall NVIDIA driver"
+        err "  - No GPU allocated to this job   -> check your Slurm --gres= flag"
         return 1
     fi
 
-    # Check for known error strings even on exit 0
     if echo "$NVSMI_OUT" | grep -qiE "Driver/library version mismatch|Failed to initialize NVML|error:"; then
         err "nvidia-smi reports a driver error:"
         err "$NVSMI_OUT"
@@ -233,102 +233,88 @@ check_nvidia_smi() {
     return 0
 }
 
-# 2. Ensure nvcc is available, install via conda if missing
-# depricated - this always crashed, better to do manually 
-ensure_nvcc() {
-    if command -v nvcc &>/dev/null; then
-        log "nvcc found: $(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)"
-        return 0
-    fi
-
-    warn "nvcc not found. Attempting to install cudatoolkit via conda..."
-    conda install -n "$ENV_NAME" -c conda-forge cudatoolkit -y 2>/dev/null || \
-    conda install -n "$ENV_NAME" cudatoolkit -y 2>/dev/null || {
-        warn "Could not install cudatoolkit via conda. Will rely on nvidia-smi for CUDA version."
-        return 1
-    }
-
-    # Reload PATH so nvcc is visible
-    export PATH="$CONDA_PREFIX/bin:$PATH"
-
-    if command -v nvcc &>/dev/null; then
-        log "nvcc installed: $(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)"
-        return 0
-    else
-        warn "nvcc still not found after install - will rely on nvidia-smi."
-        return 1
-    fi
-}
-
 # -- PyTorch -------------------------------------------------------------------
-python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" && TORCH_EXISTS=0 || TORCH_EXISTS=$?
+# Decide whether to install / reinstall torch:
+#   - Not installed           -> always install
+#   - Installed + --cuda set  -> reinstall with --force-reinstall to fix wrong build
+#   - Installed, no --cuda    -> skip
+python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)" \
+    && TORCH_EXISTS=0 || TORCH_EXISTS=$?
 
-if [[ "$TORCH_EXISTS" -eq 0 && -n "$FORCE_CUDA"]]; then
-    log "PyTorch already installed - skipping."
+if [ "$TORCH_EXISTS" -eq 0 ] && [ -z "$FORCE_CUDA" ] && [ "$FORCE_CPU" -eq 0 ]; then
+    log "PyTorch already installed and no --cuda or --force-cpu flag set - skipping."
 else
+    REINSTALL_FLAG=""
+    [ "$TORCH_EXISTS" -eq 0 ] && [ -n "$FORCE_CUDA" ] && REINSTALL_FLAG="--force-reinstall"
+    [ -n "$REINSTALL_FLAG" ] && log "Torch exists but --cuda set - forcing reinstall."
+
     CUDA_VERSION=""
     if [ "$FORCE_CPU" -eq 1 ]; then
         warn "--force-cpu flag set. Installing CPU-only PyTorch."
+
+    elif [ -n "$FORCE_CUDA" ]; then
+        # --cuda bypasses all detection
+        log "--cuda $FORCE_CUDA set: skipping auto-detection."
+
     else
         log "Detecting CUDA version..."
 
-        # If --cuda was passed, skip detection entirely
-        if [ -n "$FORCE_CUDA" ]; then
-            CUDA_VERSION="$FORCE_CUDA.0"
-            log "--cuda flag set: forcing CUDA major version $FORCE_CUDA"
-
-        else
-            # Check driver health first - exit if broken
-            if command -v nvidia-smi &>/dev/null; then
-                if ! check_nvidia_smi; then
-                    err "Cannot install GPU PyTorch with a broken driver. Exiting."
-                    err "Fix the driver or re-run with --force-cpu to install CPU-only PyTorch."
-                    err "On HPC login nodes without GPU access, use --cuda <version> instead."
-                    err "  e.g.  bash env_setup.sh --cuda 12"
-                    exit 1
-                fi
-                CUDA_VERSION=$(nvidia-smi 2>/dev/null | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
-                log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
+        if command -v nvidia-smi &>/dev/null; then
+            if ! check_nvidia_smi; then
+                err "Cannot install GPU PyTorch with a broken driver."
+                err "Options:"
+                err "  Fix the driver, then re-run this script."
+                err "  Use --force-cpu to install CPU-only PyTorch."
+                err "  Use --cuda <ver> if on an HPC login node (e.g. --cuda 13)."
+                exit 1
             fi
+            CUDA_VERSION=$(nvidia-smi 2>/dev/null \
+                | grep -oP "CUDA Version: \K[0-9]+\.[0-9]+" || true)
+            log "nvidia-smi reports CUDA: ${CUDA_VERSION:-not found}"
+        fi
 
-            # Try nvcc as fallback / confirmation, install if missing
-            if [ -z "$CUDA_VERSION" ]; then
-                #ensure_nvcc
-                if command -v nvcc &>/dev/null; then
-                    CUDA_VERSION=$(nvcc --version 2>/dev/null | grep -oP "release \K[0-9]+\.[0-9]+" || true)
-                    log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
-                fi
-            fi
+        # nvcc fallback (no auto-install - mark as deprecated in comments)
+        if [ -z "$CUDA_VERSION" ] && command -v nvcc &>/dev/null; then
+            CUDA_VERSION=$(nvcc --version 2>/dev/null \
+                | grep -oP "release \K[0-9]+\.[0-9]+" || true)
+            log "nvcc reports CUDA: ${CUDA_VERSION:-not found}"
+        fi
 
-            if [ -z "$CUDA_VERSION" ]; then
-                warn "No CUDA detected and --cuda not specified."
-                warn "If you are on an HPC login node, re-run with --cuda <version>."
-                warn "  e.g.  bash env_setup.sh --cuda 12"
-                warn "Installing CPU-only PyTorch for now."
-            fi
+        if [ -z "$CUDA_VERSION" ]; then
+            warn "No CUDA detected and --cuda not specified."
+            warn "If on an HPC login node, use:  bash env_setup.sh --cuda <ver>"
+            warn "Or submit via sbatch so GPUs are allocated for auto-detection."
+            warn "Installing CPU-only PyTorch for now."
         fi
     fi
 
+    # Resolve CUDA major version for index URL selection
     CUDA_MAJOR="${FORCE_CUDA:-${CUDA_VERSION%%.*}}"
+
     case "$CUDA_MAJOR" in
         13) log "Installing PyTorch for CUDA 13.x (cu130)..."
-            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130 ;;
+            pip install $REINSTALL_FLAG torch torchvision torchaudio \
+                --index-url https://download.pytorch.org/whl/cu130 ;;
         12) log "Installing PyTorch for CUDA 12.x (cu121)..."
-            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 ;;
+            pip install $REINSTALL_FLAG torch torchvision torchaudio \
+                --index-url https://download.pytorch.org/whl/cu121 ;;
         11) log "Installing PyTorch for CUDA 11.x (cu118)..."
-            pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
-        *)  log "Installing default PyTorch..."
-            pip3 install --upgrade torch torchvision torchaudio ;;
+            pip install $REINSTALL_FLAG torch torchvision torchaudio \
+                --index-url https://download.pytorch.org/whl/cu118 ;;
+        *)  log "Installing CPU-only PyTorch..."
+            pip install $REINSTALL_FLAG torch torchvision torchaudio ;;
     esac || { err "Failed to install PyTorch."; exit 1; }
 fi
 
+# -- Ultralytics ---------------------------------------------------------------
 if python -c "import ultralytics" &>/dev/null; then
     VERSION=$(python -c "import ultralytics; print(ultralytics.__version__)")
-    echo "Ultralytics is installed. Version: $VERSION"
+    log "Ultralytics already installed (version $VERSION) - skipping."
 else
-    log "Installing Ultralytics 8.4 ..."
+    log "Installing Ultralytics..."
     pip install ultralytics || { err "Failed to install Ultralytics."; exit 1; }
 fi
+
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
 if ! command -v poetry &>/dev/null; then
@@ -352,17 +338,17 @@ echo ""
 echo "  Environment : $ENV_NAME"
 python -c "
 import torch
-print('  Torch version:', torch.__version__)
+print('  Torch version :', torch.__version__)
 cuda_ok = torch.cuda.is_available()
 print('  CUDA available:', cuda_ok)
 if cuda_ok:
-    print('  CUDA version :', torch.version.cuda)
+    print('  CUDA version  :', torch.version.cuda)
     for i in range(torch.cuda.device_count()):
         print(f'  GPU {i}          : {torch.cuda.get_device_name(i)}')
 else:
     print('  GPU            : none (CPU-only mode)')
 "
 echo ""
-echo "  To activate the environment run:"
+echo "  Run this to activate the environment:"
 echo "    conda activate $ENV_NAME"
 echo "========================================="
