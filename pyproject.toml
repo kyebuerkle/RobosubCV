@@ -15,10 +15,7 @@ pandas = "^3.0.0"
 roboflow = "^1.2.13"
 pytest = "^9.0.2"
 argparse = "^1.4.0"
-ultralytics = "^8.4.8"
-
-[tool.poetry.extras]
-torch-external = ["torch", "torchvision", "torchaudio"]
+# this script needs ultralytics
 
 [build-system]
 requires = ["poetry-core"]

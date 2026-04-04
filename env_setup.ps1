@@ -148,11 +148,12 @@ if ($TorchExists) {
         Log "Installing PyTorch for CUDA 11.x (cu118)..."
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
     } else {
-        Log "Installing CPU-only PyTorch..."
+        Log "Installing default PyTorch..."
         pip install torch torchvision torchaudio
     }
 
     if ($LASTEXITCODE -ne 0) { Err "Failed to install PyTorch."; exit 1 }
+
 }
 
 # ------------------------------------------------------------------------------
@@ -160,7 +161,15 @@ if ($TorchExists) {
 # ------------------------------------------------------------------------------
 Log "Verifying PyTorch installation..."
 python -c "import torch; print('  torch version : ' + torch.__version__); print('  CUDA available: ' + str(torch.cuda.is_available()))"
+if ($LASTEXITCODE -ne 0) { Err "Failed to install PyTorch."; exit 1 }
 
+python -c "import ultralytics; print(ultralytics.__version__)" 2>$null
+if ($LASTEXITCODE -ne 0) 
+{ 
+	Log "Installing Ultralytics 8.4.8..."
+	pip install --no-deps ultralytics==8.4.8
+	if ($LASTEXITCODE -ne 0) { Err "Failed to install Ultralytics."; exit 1 }
+}
 # ------------------------------------------------------------------------------
 # Poetry
 # ------------------------------------------------------------------------------

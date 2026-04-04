@@ -317,10 +317,17 @@ else
         11) log "Installing PyTorch for CUDA 11.x (cu118)..."
             pip install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 ;;
         *)  log "Installing default PyTorch..."
-            pip install --upgrade torch torchvision torchaudio ;;
+            pip3 install --upgrade torch torchvision torchaudio ;;
     esac || { err "Failed to install PyTorch."; exit 1; }
 fi
 
+if python -c "import ultralytics" &>/dev/null; then
+    VERSION=$(python -c "import ultralytics; print(ultralytics.__version__)")
+    echo "Ultralytics is installed. Version: $VERSION"
+else
+    log "Installing Ultralytics 8.4.8..."
+    pip install --no-dep ultralytics==8.4.8 || { err "Failed to install Ultralytics."; exit 1; }
+fi
 # -- Poetry --------------------------------------------------------------------
 log "Checking Poetry..."
 if ! command -v poetry &>/dev/null; then
