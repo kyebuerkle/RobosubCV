@@ -364,18 +364,20 @@ def build_summary(
 
                 if has_pct_area:
                     try:
-                        pct = pd.to_numeric(grp["% area"], errors="coerce")
+                        # Convert from 0-100 scale to 0.0-1.0 decimal
+                        pct = pd.to_numeric(grp["% area"], errors="coerce") / 100.0
 
-                        # min % area: only labels with % area > 10%
-                        # (excludes nearly-fully-cropped / missed labels)
-                        min_mask = pct > 10.0
+                        # min_pct_area: only labels with area > 0.10 (i.e. > 10%)
+                        # excludes near-zero ghost / fully-cropped labels
+                        min_mask = pct > 0.10
                         agg["min_pct_area"] = safe_min(pct[min_mask])
 
-                        # avg % area: only labels between 1% and 99% exclusive
-                        # (excludes fully-visible labels and near-zero ghost labels,
-                        #  so the average reflects actually-cropped objects only)
-                        avg_mask = (pct > 1.0) & (pct < 99.0)
-                        agg["avg_pct_area"] = safe_mean(pct[avg_mask])
+                        # avg_pct_area: only labels between 0.01 and 0.99 exclusive
+                        # i.e. labels that were genuinely partially cropped.
+                        # If no such labels exist → 0.0 (nothing was cropped)
+                        avg_mask = (pct > 0.01) & (pct < 0.99)
+                        cropped  = pct[avg_mask]
+                        agg["avg_pct_area"] = safe_mean(cropped) if len(cropped) > 0 else 0.0
                     except Exception as e:
                         print(f"  [debug] Error computing % area stats: {e}")
                         agg["min_pct_area"] = None
