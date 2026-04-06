@@ -109,11 +109,11 @@ def call_evaluate_yolo(args: argparse.Namespace) -> int:
     eval_script = args.eval_script
     if eval_script is None:
         # Default: same directory as this script
-        eval_script = Path(__file__).parent / "evaluate_yolo.py"
+        eval_script = Path(__file__).parent / "test_evaluate_yolo.py"
 
     eval_script = Path(eval_script)
     if not eval_script.exists():
-        print(f"[ERROR] evaluate_yolo.py not found at: {eval_script}")
+        print(f"[ERROR] test_evaluate_yolo.py not found at: {eval_script}")
         print("        Use --eval-script to specify its location.")
         sys.exit(1)
 
@@ -265,17 +265,17 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
         base_path = Path(base)
         # Roboflow standard: path key is the dataset dir, splits use ../sibling/images
         # so the true root is path's parent
-        candidates.append(base_path.parent / p)
+        candidates.append((base_path.parent / p).resolve())
         # Also try path / raw directly (no leading ../)
-        candidates.append(base_path / p)
+        candidates.append((base_path / p).resolve())
 
     # Fallback: relative to the YAML file's own directory
-    candidates.append(yaml_path.parent / p)
+    candidates.append((yaml_path.parent / p).resolve())
 
+    print(f"Candidates for data path: {candidates}")
     for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.exists():
-            return resolved
+        if candidate:
+            return candidate
 
     return None
 
