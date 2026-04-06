@@ -269,8 +269,8 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
         # Also try path / raw directly (no leading ../)
         candidates.append((base_path / p).resolve())
 
-    # Fallback: relative to the YAML file's own directory
-    candidates.append((yaml_path.parent / p).resolve())
+    # Fallback: relative to the YAML file
+    candidates.append((yaml_path / p).resolve())
 
     print(f"Candidates for data path: {candidates}")
     for candidate in candidates:
