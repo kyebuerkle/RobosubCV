@@ -90,6 +90,63 @@ def ask_yes_no(prompt: str, default_yes: bool = True) -> bool:
         print("Enter y or n.")
 
 
+def ask_class_scope(action_label: str, class_names: list[str]) -> list[str]:
+    if not class_names:
+        return []
+
+    print(f"\nChoose classes for: {action_label}")
+    print("  1) Run on all classes")
+    print("  2) Choose which classes to include")
+    print("  3) Choose which classes to skip")
+
+    while True:
+        choice = input("Choose [1-3]: ").strip()
+        if choice in {"1", "2", "3"}:
+            break
+        print("Enter 1, 2, or 3.")
+
+    if choice == "1":
+        return class_names[:]
+
+    print("\nAvailable classes:")
+    for i, cname in enumerate(class_names, start=1):
+        print(f"  {i}) {cname}")
+
+    while True:
+        raw = input("Enter class numbers separated by commas: ").strip()
+        if not raw:
+            print("Enter at least one class number.")
+            continue
+
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        selected_indices = []
+        valid = True
+
+        for p in parts:
+            if not p.isdigit():
+                valid = False
+                break
+            idx = int(p)
+            if idx < 1 or idx > len(class_names):
+                valid = False
+                break
+            if idx not in selected_indices:
+                selected_indices.append(idx)
+
+        if valid and selected_indices:
+            break
+
+        print("Enter valid class numbers like: 1,3,4")
+
+    selected = [class_names[i - 1] for i in selected_indices]
+
+    if choice == "2":
+        return selected
+
+    skipped = set(selected)
+    return [cname for cname in class_names if cname not in skipped]
+
+
 # -----------------------------
 # Helpers
 # -----------------------------
@@ -329,15 +386,19 @@ def move_blurry_640_only(*, out_640: Path, rejected_root: Path, threshold: float
     return kept, moved
 
 
-def restore_rejected_640_only(*, resized_root: Path, rejected_root: Path) -> int:
+def restore_rejected_640_only(*, resized_root: Path, rejected_root: Path, selected_classes=None) -> int:
     if not rejected_root.exists():
         return 0
 
+    selected_set = set(selected_classes) if selected_classes is not None else None
     moved = 0
     class_dirs = sorted([p for p in rejected_root.iterdir() if p.is_dir()], key=lambda p: p.name.lower())
 
     for cdir in class_dirs:
         cname = cdir.name
+        if selected_set is not None and cname not in selected_set:
+            continue
+
         src_640 = cdir / "640x480"
         if not src_640.exists():
             continue
@@ -452,17 +513,22 @@ def cap_class_total_640_frames(*, resized_root: Path, rejected_root: Path, cname
     return total_after, moved
 
 
-def delete_all_extracted_640_frames(resized_root: Path, rejected_root: Path, mass_root: Path) -> int:
+def delete_all_extracted_640_frames(resized_root: Path, rejected_root: Path, mass_root: Path, selected_classes=None) -> int:
     removed = 0
+    selected_set = set(selected_classes) if selected_classes is not None else None
 
     if resized_root.exists():
         for class_dir in [p for p in resized_root.iterdir() if p.is_dir()]:
+            if selected_set is not None and class_dir.name not in selected_set:
+                continue
             for img in list_images(class_dir):
                 img.unlink()
                 removed += 1
 
     if rejected_root.exists():
         for class_dir in [p for p in rejected_root.iterdir() if p.is_dir()]:
+            if selected_set is not None and class_dir.name not in selected_set:
+                continue
             rej_640 = class_dir / "640x480"
             if not rej_640.exists():
                 continue
@@ -471,7 +537,7 @@ def delete_all_extracted_640_frames(resized_root: Path, rejected_root: Path, mas
                 img.unlink()
                 removed += 1
 
-    if mass_root.exists():
+    if mass_root.exists() and selected_set is None:
         for img in list_images(mass_root):
             img.unlink()
             removed += 1
@@ -600,6 +666,16 @@ def action_extract(renamed_sorted: Path, resized_root: Path):
     if not report:
         return
 
+    selected_classes = ask_class_scope(
+        "extract frames",
+        [r["cname"] for r in report],
+    )
+    if not selected_classes:
+        print("No classes selected.")
+        return
+
+    selected_set = set(selected_classes)
+
     class_dirs = sorted(
         [p for p in renamed_sorted.iterdir() if p.is_dir()],
         key=lambda p: p.name.lower()
@@ -608,6 +684,8 @@ def action_extract(renamed_sorted: Path, resized_root: Path):
     for class_dir in class_dirs:
         cname = norm_class(class_dir.name)
         if not cname:
+            continue
+        if cname not in selected_set:
             continue
 
         vids_sorted = sorted(list_videos(class_dir), key=lambda p: p.name.lower())
@@ -703,9 +781,19 @@ def action_blur_clean_640_only(renamed_sorted: Path, resized_root: Path, rejecte
         print("No class subfolders found in:", renamed_sorted)
         return
 
+    class_names = [norm_class(p.name) for p in class_dirs if norm_class(p.name)]
+    selected_classes = ask_class_scope("remove blurry frames", class_names)
+    if not selected_classes:
+        print("No classes selected.")
+        return
+
+    selected_set = set(selected_classes)
+
     for class_dir in class_dirs:
         cname = norm_class(class_dir.name)
         if not cname:
+            continue
+        if cname not in selected_set:
             continue
 
         out_640 = resized_root / cname
@@ -728,7 +816,25 @@ def action_blur_clean_640_only(renamed_sorted: Path, resized_root: Path, rejecte
 
 
 def action_restore_rejected_640(resized_root: Path, rejected_root: Path):
-    moved = restore_rejected_640_only(resized_root=resized_root, rejected_root=rejected_root)
+    if not rejected_root.exists():
+        print("No rejected frames folder found.")
+        return
+
+    class_names = sorted([p.name for p in rejected_root.iterdir() if p.is_dir()], key=str.lower)
+    if not class_names:
+        print("No rejected class folders found.")
+        return
+
+    selected_classes = ask_class_scope("restore rejected frames", class_names)
+    if not selected_classes:
+        print("No classes selected.")
+        return
+
+    moved = restore_rejected_640_only(
+        resized_root=resized_root,
+        rejected_root=rejected_root,
+        selected_classes=selected_classes,
+    )
     print(f"\nRestored rejected 640x480 frames moved back: {moved}")
 
 
@@ -741,11 +847,21 @@ def action_cap_640_frames(renamed_sorted: Path, resized_root: Path, rejected_roo
         print("No class subfolders found in:", renamed_sorted)
         return
 
+    class_names = [norm_class(p.name) for p in class_dirs if norm_class(p.name)]
+    selected_classes = ask_class_scope(f"cap frames to {MAX_FRAMES_PER_CLASS_640}", class_names)
+    if not selected_classes:
+        print("No classes selected.")
+        return
+
+    selected_set = set(selected_classes)
+
     print(f"\nCapping policy: keep {MAX_FRAMES_PER_CLASS_640} 640x480 frames TOTAL per class.")
 
     for class_dir in class_dirs:
         cname = norm_class(class_dir.name)
         if not cname:
+            continue
+        if cname not in selected_set:
             continue
 
         folder = resized_root / cname
@@ -781,12 +897,48 @@ def action_cap_640_frames(renamed_sorted: Path, resized_root: Path, rejected_roo
 
 
 def action_delete_all_extracted_640(resized_root: Path, rejected_root: Path, mass_root: Path):
-    if not ask_yes_no("Delete ALL extracted, rejected, and combined mass-folder 640x480 frames?", default_yes=False):
+    class_names = sorted(
+        {
+            p.name for p in resized_root.iterdir() if p.is_dir()
+        }.union(
+            p.name for p in rejected_root.iterdir() if p.is_dir()
+        ),
+        key=str.lower,
+    )
+
+    if not class_names:
+        print("No extracted or rejected class folders found.")
+        return
+
+    selected_classes = ask_class_scope("delete extracted frames", class_names)
+    if not selected_classes:
+        print("No classes selected.")
+        return
+
+    deleting_all = len(selected_classes) == len(class_names)
+    if deleting_all:
+        prompt = "Delete ALL extracted, rejected, and combined mass-folder 640x480 frames for all classes?"
+    else:
+        prompt = "Delete extracted and rejected 640x480 frames for the selected classes?"
+
+    if not ask_yes_no(prompt, default_yes=False):
         print("Cancelled.")
         return
 
-    removed = delete_all_extracted_640_frames(resized_root, rejected_root, mass_root)
-    print(f"\nDeleted extracted/rejected/combined 640x480 frames: {removed}")
+    removed = delete_all_extracted_640_frames(
+        resized_root,
+        rejected_root,
+        mass_root,
+        selected_classes=None if deleting_all else selected_classes,
+    )
+
+    if deleting_all:
+        print(f"\nDeleted extracted/rejected/combined 640x480 frames: {removed}")
+    else:
+        copied = rebuild_pruned_mass_folder(resized_root=resized_root, mass_root=mass_root)
+        print(f"\nDeleted extracted/rejected 640x480 frames for selected classes: {removed}")
+        print(f"Rebuilt combined kept-frames folder: {mass_root}")
+        print(f"  total files copied: {copied}")
 
 
 # -----------------------------
@@ -817,13 +969,13 @@ def main():
     print("renamed_sorted :", renamed_sorted)
     print("640x480_frames :", resized_root)
     print("rejected_frames:", rejected_root)
-    print("pruned_500_all :", mass_root)
+    print("all_objects :", mass_root)
 
     while True:
         mode = ask_menu()
 
         if mode == 8:
-            print("Bye.")
+            print("Quitting.")
             break
 
         if mode == 1:
