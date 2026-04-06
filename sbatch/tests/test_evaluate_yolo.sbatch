@@ -20,20 +20,23 @@ module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 cd $HOME/RobosubCV/src/model_training/tests
 
+CONFIGFILE=$HOME/RobosubCV/src/configuration.json
 MODELS=(
 )
 DATASET=
 SPLIT=(
 test
 train
-valid
+val
 )
 
 #	device is, cpu= 1 cpu, 0= 1 GPU, 0,1= 2 GPU
 DEVICE=0,1
 
 poetry install
-poetry run python evaluate_yolo_labels.py -m "${MODELS[@]}" -d $DATASET --device $DEVICE --split "${SPLIT[@]}"
+poetry run python evaluate_yolo_labels.py --config $CONFIGFILE -m "${MODELS[@]}" -d $DATASET --device $DEVICE --split "${SPLIT[@]}"
+
+poetry run python summarize_yolo_results.py -d ./output -o summarized_yolo_results.csv
 
 cd $HOME/RobosubCV/sbatch
 
