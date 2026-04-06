@@ -265,41 +265,70 @@ def build_summary(
     # ── Join AP columns ────────────────────────────────────────────────────
     if ap_df is not None:
         try:
-            # Normalise ap_df column names
             ap_df = ap_df.copy()
+            # Normalise column names to lowercase/underscores
             ap_df.columns = [c.strip().lower().replace("-", "_")
                               for c in ap_df.columns]
 
-            # Rename confidence → confidence_threshold if needed
-            if "confidence" in ap_df.columns and \
-               "confidence_threshold" not in ap_df.columns:
-                ap_df = ap_df.rename(columns={"confidence": "confidence_threshold"})
+            # Rename common variants
             if "object_id" in ap_df.columns and "class_id" not in ap_df.columns:
                 ap_df = ap_df.rename(columns={"object_id": "class_id"})
+            if "name" in ap_df.columns and "object_name" not in ap_df.columns:
+                ap_df = ap_df.rename(columns={"name": "object_name"})
 
-            ap_keys = ["model", "split", "object_name"]
-            if "confidence_threshold" in ap_df.columns and \
-               "confidence_threshold" in summary.columns:
-                ap_keys.append("confidence_threshold")
-            if "class_id" in ap_df.columns and "class_id" in summary.columns:
-                ap_keys.append("class_id")
+            # Normalise object_name strings for matching (strip whitespace)
+            if "object_name" in ap_df.columns:
+                ap_df["object_name"] = ap_df["object_name"].astype(str).str.strip()
+            summary["object_name"] = summary["object_name"].astype(str).str.strip()
+
+            # Drop any pre-existing blank AP columns so the merge doesn't dupe them
+            for _col in ("AP50", "AP50_95", "ap50", "ap50_95"):
+                if _col in summary.columns:
+                    summary = summary.drop(columns=[_col])
 
             ap_cols = [c for c in ("ap50", "ap50_95") if c in ap_df.columns]
             if not ap_cols:
-                print(f"  [debug] No AP50/AP50_95 columns found in {AP_FILE} — "
-                      "AP columns will be blank.")
+                print(f"  [debug] No ap50/ap50_95 columns found in {AP_FILE}.")
+                print(f"  [debug] Columns present: {list(ap_df.columns)}")
             else:
-                ap_merge = ap_df[ap_keys + ap_cols].drop_duplicates(subset=ap_keys)
-                summary   = summary.merge(ap_merge, on=ap_keys, how="left")
+                # Try progressively looser join keys until we get at least one match.
+                # AP is one value per class per model/split — never join on confidence.
+                key_attempts = [
+                    ["model", "split", "object_name", "class_id"],
+                    ["model", "split", "object_name"],
+                    ["model", "object_name"],
+                    ["object_name"],
+                ]
+                merged = None
+                used_keys = None
+                for keys in key_attempts:
+                    valid_keys = [k for k in keys
+                                  if k in ap_df.columns and k in summary.columns]
+                    if len(valid_keys) < len(keys):
+                        continue   # a required key is missing from one side
+                    ap_sub = ap_df[valid_keys + ap_cols].drop_duplicates(subset=valid_keys)
+                    candidate = summary.merge(ap_sub, on=valid_keys, how="left")
+                    filled = candidate["ap50"].notna().sum()
+                    if filled > 0:
+                        merged    = candidate
+                        used_keys = valid_keys
+                        break
 
-                # Rename to clean output names
-                rename = {"ap50": "AP50", "ap50_95": "AP50_95"}
-                summary = summary.rename(columns=rename)
+                if merged is None or merged["ap50"].isna().all():
+                    print(f"  [debug] AP merge produced all-NaN across all key attempts.")
+                    print(f"  [debug] AP file object_name sample: "
+                          f"{ap_df['object_name'].unique()[:5] if 'object_name' in ap_df.columns else 'N/A'}")
+                    print(f"  [debug] Summary object_name sample: "
+                          f"{summary['object_name'].unique()[:5]}")
+                    print(f"  [debug] Dropping AP columns from output.")
+                    # Do not add AP columns at all — cleaner than all-NaN
+                else:
+                    print(f"  AP joined on keys: {used_keys} "
+                          f"({merged['ap50'].notna().sum()} rows filled)")
+                    summary = merged.rename(columns={"ap50": "AP50", "ap50_95": "AP50_95"})
 
         except Exception as e:
-            print(f"  [debug] Failed to join AP data: {e} — AP columns will be blank.")
-            summary["AP50"]    = None
-            summary["AP50_95"] = None
+            print(f"  [debug] Failed to join AP data: {e} -- dropping AP columns.")
 
     # ── Join label / area columns ──────────────────────────────────────────
     if label_df is not None:
@@ -330,9 +359,13 @@ def build_summary(
             # Check % area columns
             has_pct_area    = "% area"    in label_df.columns
             has_gt_pct_area = "gt % area" in label_df.columns
+            has_iou50       = "iou50"     in label_df.columns
             if not has_pct_area:
                 print(f"  [debug] '% area' column missing from {LABEL_FILE} — "
                       "min/avg % area will be blank.")
+            if not has_iou50:
+                print(f"  [debug] 'iou50' column missing from {LABEL_FILE} — "
+                      "% area stats will NOT be filtered to TP labels only.")
 
             # Group label_df by the same keys as summary
             label_group_keys = ["model", "split", "object_name"]
@@ -353,6 +386,14 @@ def build_summary(
                 for k, v in zip(label_group_keys, grp_keys):
                     agg[k] = v
 
+                # TP subset: iou50 == 1.0 only — keeps FP boxes from
+                # corrupting % area min/avg with arbitrarily-sized predictions.
+                if has_iou50:
+                    tp_mask = pd.to_numeric(grp["iou50"], errors="coerce") == 1.0
+                    grp_tp  = grp[tp_mask]
+                else:
+                    grp_tp  = grp   # fallback: use all rows
+
                 if area_computed:
                     agg["min_area_px"] = safe_min(grp["_area_px"])
                     agg["max_area_px"] = safe_max(grp["_area_px"])
@@ -364,17 +405,14 @@ def build_summary(
 
                 if has_pct_area:
                     try:
-                        # Convert from 0-100 scale to 0.0-1.0 decimal
-                        pct = pd.to_numeric(grp["% area"], errors="coerce") / 100.0
+                        # Convert 0-100 to 0.0-1.0; use TP-only rows.
+                        pct = pd.to_numeric(grp_tp["% area"], errors="coerce") / 100.0
 
-                        # min_pct_area: only labels with area > 0.10 (i.e. > 10%)
-                        # excludes near-zero ghost / fully-cropped labels
+                        # min_pct_area: TP labels with area > 0.10
                         min_mask = pct > 0.10
                         agg["min_pct_area"] = safe_min(pct[min_mask])
 
-                        # avg_pct_area: only labels between 0.01 and 0.99 exclusive
-                        # i.e. labels that were genuinely partially cropped.
-                        # If no such labels exist → 0.0 (nothing was cropped)
+                        # avg_pct_area: TP labels between 0.01 and 0.99 exclusive
                         avg_mask = (pct > 0.01) & (pct < 0.99)
                         cropped  = pct[avg_mask]
                         agg["avg_pct_area"] = safe_mean(cropped) if len(cropped) > 0 else 0.0
@@ -386,6 +424,27 @@ def build_summary(
                     agg["min_pct_area"] = None
                     agg["avg_pct_area"] = None
 
+                # gt % area stats — ground-truth crop fractions for TP labels
+                if has_gt_pct_area:
+                    try:
+                        gt_pct = pd.to_numeric(grp_tp["gt % area"], errors="coerce") / 100.0
+
+                        # min_gt_pct_area: TP GT labels with area > 0.10
+                        gt_min_mask = gt_pct > 0.10
+                        agg["min_gt_pct_area"] = safe_min(gt_pct[gt_min_mask])
+
+                        # avg_gt_pct_area: TP GT labels between 0.01 and 0.99
+                        gt_avg_mask = (gt_pct > 0.01) & (gt_pct < 0.99)
+                        gt_cropped  = gt_pct[gt_avg_mask]
+                        agg["avg_gt_pct_area"] = safe_mean(gt_cropped) if len(gt_cropped) > 0 else 0.0
+                    except Exception as e:
+                        print(f"  [debug] Error computing gt % area stats: {e}")
+                        agg["min_gt_pct_area"] = None
+                        agg["avg_gt_pct_area"] = None
+                else:
+                    agg["min_gt_pct_area"] = None
+                    agg["avg_gt_pct_area"] = None
+
                 label_agg_rows.append(agg)
 
             label_agg = pd.DataFrame(label_agg_rows)
@@ -395,7 +454,8 @@ def build_summary(
             print(f"  [debug] Failed to join label/area data: {e} — "
                 "area columns will be blank.")
             for col in ("min_area_px", "max_area_px", "avg_area_px",
-                        "min_pct_area", "avg_pct_area"):
+                        "min_pct_area", "avg_pct_area",
+                        "min_gt_pct_area", "avg_gt_pct_area"):
                 summary[col] = None
 
     return summary
@@ -421,6 +481,8 @@ COLUMN_ORDER = [
     "avg_area_px",
     "min_pct_area",
     "avg_pct_area",
+    "min_gt_pct_area",
+    "avg_gt_pct_area",
 ]
 
 
