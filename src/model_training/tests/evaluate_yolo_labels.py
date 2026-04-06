@@ -397,15 +397,13 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
     base = cfg.get("path")
 
     candidates = []
+    candidates.append((yaml_path / p).resolve())
     if base:
         base_path = Path(base)
         # PRIMARY: resolve '../split/images' relative to the dataset 'path' dir
         candidates.append((base_path / p).resolve())
         # SECONDARY: resolve relative to path's parent
-        candidates.append((base_path.parent / p).resolve())
-
-    # Fallback: relative to the YAML file's directory
-    candidates.append((yaml_path.parent / p).resolve())
+        candidates.append((base_path.parent / p).resolve())    
 
     for candidate in candidates:
         if candidate.exists():
