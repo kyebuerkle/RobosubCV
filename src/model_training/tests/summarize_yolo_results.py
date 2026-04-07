@@ -407,8 +407,8 @@ def build_summary(
 
                 if has_pct_area:
                     try:
-                        # Convert 0-100 to 0.0-1.0; use TP-only rows.
-                        pct = pd.to_numeric(grp_tp["% area"], errors="coerce") / 100.0
+                        # % area is already 0.0-1.0 decimal (output by evaluate_yolo_labels.py).
+                        pct = pd.to_numeric(grp_tp["% area"], errors="coerce")
 
                         # min_pct_area: TP labels with area > 0.10
                         min_mask = pct > 0.10
@@ -429,7 +429,8 @@ def build_summary(
                 # gt % area stats — ground-truth crop fractions for TP labels
                 if has_gt_pct_area:
                     try:
-                        gt_pct = pd.to_numeric(grp_tp["gt % area"], errors="coerce") / 100.0
+                        # gt % area is already 0.0-1.0 decimal.
+                        gt_pct = pd.to_numeric(grp_tp["gt % area"], errors="coerce")
 
                         # min_gt_pct_area: TP GT labels with area > 0.10
                         gt_min_mask = gt_pct > 0.10
