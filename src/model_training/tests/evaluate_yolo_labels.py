@@ -42,7 +42,9 @@ Usage
     # mirrors evaluate_yolo.py flags — pass the same arguments
     python evaluate_yolo_labels.py -m model1.pt -d dataset/data.yaml
 
-    # with resize-augmentation config for % area columns
+    # % area columns are computed automatically when data.yaml contains
+    # an 'augmentations' block (written by dataset_config.py).
+    # Override with --config if you have a standalone configuration.json:
     python evaluate_yolo_labels.py -m model1.pt -d dataset/data.yaml \
         --config configuration.json
 
@@ -106,11 +108,12 @@ def parse_args() -> argparse.Namespace:
                    help="Path to evaluate_yolo.py. Defaults to the same "
                         "directory as this script.")
 
-    # Optional augmentation config for % area calculation
+    # Optional augmentation config override for % area calculation.
+    # If omitted, augmentation parameters are read from the 'augmentations'
+    # block in data.yaml (written automatically by dataset_config.py).
     p.add_argument("--config", default=None, metavar="PATH",
-                   help="Path to configuration.json containing augmentation "
-                        "parameters (e.g. resize list).  Required for "
-                        "'%% area' and 'gt %% area' columns.")
+                   help="Path to configuration.json. Overrides the "
+                        "'augmentations' block in data.yaml if both exist.")
 
     return p.parse_args()
 
@@ -121,14 +124,7 @@ def parse_args() -> argparse.Namespace:
 
 def load_augmentation_config(config_path: str) -> dict:
     """
-    Load configuration.json and return a parsed config dict.
-
-    Expected structure (example):
-        {
-          "resize": [0.25, 1.0, 1.75],
-          "saturation": [...],
-          "exposure": [...]
-        }
+    Load a standalone configuration.json (manual override).
 
     Returns empty dict if path is None or file cannot be parsed.
     """
@@ -137,9 +133,44 @@ def load_augmentation_config(config_path: str) -> dict:
     try:
         with open(config_path) as f:
             cfg = json.load(f)
+        print(f"[config] Loaded augmentation config from {config_path}")
         return cfg
     except Exception as e:
         print(f"[warn] Could not load augmentation config {config_path}: {e}")
+        return {}
+
+
+def load_augmentation_config_from_yaml(data_yaml_path: str) -> dict:
+    """
+    Read the 'augmentations' block written by dataset_config.py into data.yaml.
+
+    Expected YAML block:
+        augmentations:
+          order: [sat, exp, res]
+          naming_convention: "{file}_sat{ind}_exp{ind}_res{ind}{ext}"
+          saturation: [0.7, 1.0, 1.3]
+          exposure:   [0.615, 1.0, 1.385]
+          resize:     [0.25, 1.0, 1.5, 2.0]
+          resize_baseline_index: 1
+
+    Returns the augmentations sub-dict, or empty dict if not present.
+    """
+    try:
+        with open(data_yaml_path) as f:
+            data = yaml.safe_load(f)
+        aug = data.get("augmentations", {})
+        if aug:
+            print(f"[config] Loaded augmentation metadata from data.yaml")
+            print(f"  order:             {aug.get('order')}")
+            print(f"  naming_convention: {aug.get('naming_convention')}")
+            print(f"  resize:            {aug.get('resize')}  "
+                  f"(baseline index: {aug.get('resize_baseline_index')})")
+        else:
+            print("[config] No 'augmentations' block found in data.yaml — "
+                  "'% area' columns will be empty.")
+        return aug
+    except Exception as e:
+        print(f"[warn] Could not read augmentation metadata from data.yaml: {e}")
         return {}
 
 
@@ -218,46 +249,57 @@ def make_baseline_stem(base: str, augs: dict[str, int],
 # ─────────────────────────────────────────────────────────────────
 
 def compute_percent_area(
-    cx_n: float, cy_n: float, w_n: float, h_n: float,
     baseline_cx_n: float, baseline_cy_n: float,
     baseline_w_n: float, baseline_h_n: float,
     resize_scale: float,
 ) -> float:
     """
-    Compute the percentage of an object's true area that remains inside
-    the frame after an upscale augmentation.
+    Compute the fraction of an object that remains visible after an upscale
+    augmentation, using the same affine+clamp logic as yolo_scale_label().
 
-    Parameters
-    ----------
-    cx_n, cy_n, w_n, h_n          : normalised box in the AUGMENTED image
-    baseline_cx_n, …, baseline_h_n: normalised box in the BASELINE (res=1.0) image
-    resize_scale                   : the resize multiplier applied (e.g. 2.0)
+    The augmentation scales from the image centre (origin = 0.5, 0.5 in
+    normalised coords), which is the default in yolo_scale_label.
+
+    Steps
+    -----
+    1. Apply the affine shift to the baseline box centre:
+           cx_new = scale * (cx - 0.5) + 0.5
+           cy_new = scale * (cy - 0.5) + 0.5
+           w_new  = scale * w
+           h_new  = scale * h
+    2. Compute unclamped area = w_new * h_new  (what the box WOULD be)
+    3. Clamp edges to [0, 1] and compute clamped area
+    4. fraction_visible = clamped_area / unclamped_area
 
     Returns
     -------
-    Percentage 0–100 (float).  Returns 100.0 if resize_scale <= 1.0 since
-    no upscaling occurred.
-
-    Approach
-    --------
-    The true (unclipped) object dimensions in normalised coords would be
-    baseline_w × resize_scale and baseline_h × resize_scale.  The clipped
-    dimensions are what appears in the augmented label (w_n, h_n).  The
-    ratio of clipped area to true area gives the fraction visible.
+    Float in [0.0, 1.0].  Returns 1.0 if resize_scale <= 1.0.
     """
     if resize_scale <= 1.0:
-        return 100.0
+        return 1.0
 
-    true_w = baseline_w_n * resize_scale
-    true_h = baseline_h_n * resize_scale
-    true_area = true_w * true_h
+    ox_n, oy_n = 0.5, 0.5   # centre origin (normalised)
 
-    if true_area <= 0:
-        return 100.0
+    cx_new = resize_scale * (baseline_cx_n - ox_n) + ox_n
+    cy_new = resize_scale * (baseline_cy_n - oy_n) + oy_n
+    w_new  = resize_scale * baseline_w_n
+    h_new  = resize_scale * baseline_h_n
 
-    clipped_area = w_n * h_n
-    fraction_visible = min(clipped_area / true_area, 1.0)
-    return round(fraction_visible * 100.0, 4)
+    unclamped_area = w_new * h_new
+    if unclamped_area <= 0:
+        return 1.0
+
+    x1 = cx_new - w_new / 2;  x2 = cx_new + w_new / 2
+    y1 = cy_new - h_new / 2;  y2 = cy_new + h_new / 2
+
+    x1c = max(0.0, x1);  x2c = min(1.0, x2)
+    y1c = max(0.0, y1);  y2c = min(1.0, y2)
+
+    clamped_w = max(0.0, x2c - x1c)
+    clamped_h = max(0.0, y2c - y1c)
+    clamped_area = clamped_w * clamped_h
+
+    return round(min(clamped_area / unclamped_area, 1.0), 6)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -397,13 +439,14 @@ def get_split_image_dir(data_yaml_path: str, split: str) -> Path | None:
     base = cfg.get("path")
 
     candidates = []
+    # PRIMARY: relative to the YAML file itself (yaml_path is already resolved)
     candidates.append((yaml_path / p).resolve())
     if base:
         base_path = Path(base)
-        # PRIMARY: resolve '../split/images' relative to the dataset 'path' dir
+        # resolve '../split/images' relative to the dataset 'path' dir
         candidates.append((base_path / p).resolve())
-        # SECONDARY: resolve relative to path's parent
-        candidates.append((base_path.parent / p).resolve())    
+        # resolve relative to path's parent
+        candidates.append((base_path.parent / p).resolve())
 
     for candidate in candidates:
         if candidate.exists():
@@ -574,7 +617,6 @@ class AreaCache:
             return None
 
         pct = compute_percent_area(
-            cx_n, cy_n, w_n, h_n,
             best_row[1], best_row[2], best_row[3], best_row[4],
             resize_scale,
         )
@@ -781,13 +823,25 @@ def main():
     args       = parse_args()
     output_dir = Path(args.output).resolve()
 
-    # ── Load augmentation config (optional) ───────────────────────────────
-    aug_cfg = load_augmentation_config(args.config)
+    # ── Load augmentation config ──────────────────────────────────────────
+    # Priority: --config (manual override) > augmentations block in data.yaml
+    if args.config is not None:
+        aug_cfg = load_augmentation_config(args.config)
+    else:
+        aug_cfg = load_augmentation_config_from_yaml(args.data)
+
     if aug_cfg:
         resize_map = build_resize_index_map(aug_cfg)
-        bl_idx     = get_baseline_res_index(resize_map)
-        print(f"[config] Resize map: {resize_map}")
-        print(f"[config] Baseline res index (1.0): {bl_idx}")
+        # Use the pre-computed baseline index from data.yaml if available,
+        # otherwise fall back to scanning the list for value == 1.0.
+        if "resize_baseline_index" in aug_cfg and aug_cfg["resize_baseline_index"] is not None:
+            bl_idx = int(aug_cfg["resize_baseline_index"])
+            print(f"[config] Resize map: {resize_map}")
+            print(f"[config] Baseline res index (from yaml): {bl_idx}")
+        else:
+            bl_idx = get_baseline_res_index(resize_map)
+            print(f"[config] Resize map: {resize_map}")
+            print(f"[config] Baseline res index (scanned): {bl_idx}")
     else:
         print("[config] No augmentation config loaded — "
               "'% area' columns will be empty.")
