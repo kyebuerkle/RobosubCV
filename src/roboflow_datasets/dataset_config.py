@@ -347,11 +347,6 @@ class Config:
 			print("[Config] No augmentations configured, returning base dataset.")
 			return input_dataset
 
-		if config.VERBOSE:
-			print(f"[Config] Running augmentations — mode={self.augment_mode}  num={self.augment_num}")
-			for k, v in aug_config.items():
-				print(f"  {k}: {v}")
-
 		yolo_augment(
 			input_dataset  = input_dataset,
 			output_dataset = augmented_dataset,
