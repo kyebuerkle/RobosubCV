@@ -386,10 +386,12 @@ def build_summary(
                 for k, v in zip(label_group_keys, grp_keys):
                     agg[k] = v
 
-                # TP subset: iou50 == 1.0 only — keeps FP boxes from
+                # TP subset: iou50 >= 0.5 — keeps FP boxes from
                 # corrupting % area min/avg with arbitrarily-sized predictions.
+                # Note: iou50 column stores the raw IoU value (0.0–1.0),
+                # not a binary flag, so we threshold at 0.5 not == 1.0.
                 if has_iou50:
-                    tp_mask = pd.to_numeric(grp["iou50"], errors="coerce") == 1.0
+                    tp_mask = pd.to_numeric(grp["iou50"], errors="coerce") >= 0.5
                     grp_tp  = grp[tp_mask]
                 else:
                     grp_tp  = grp   # fallback: use all rows
