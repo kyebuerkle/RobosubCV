@@ -161,6 +161,16 @@ def apply_augmentations_to_dir(
 		print(f"[augment_strategy] Unknown mode '{mode}', falling back to 'all'.")
 		_apply_all(image_files, working_img_out, labels_dir, working_lbl_out, aug_specs)
 
+	#	Always copy the original image (and its label) into the output directory.
+	#	In replace_mode the originals are already in place — only needed when
+	#	writing to a separate output directory.
+	if not replace_mode:
+		for img_file in image_files:
+			shutil.copy2(str(img_file), str(working_img_out / img_file.name))
+			label_file = _find_label(img_file, labels_dir)
+			if label_file and working_lbl_out:
+				shutil.copy2(str(label_file), str(working_lbl_out / label_file.name))
+
 	#	Swap temp dirs back into place for replace_mode
 	if replace_mode:
 		_swap_replace(images_dir, temp_img_dir, image_files)
@@ -174,7 +184,8 @@ def apply_augmentations_to_dir(
 	                      if mode == MODE_ALL else num)
 	if config.VERBOSE:
 		print(f"[augment_strategy] mode={mode}  originals={total}  "
-		      f"augmented≈{augmented}  specs={[s.name for s in aug_specs]}")
+		      f"augmented={augmented}  total_output={total + augmented}  "
+		      f"specs={[s.name for s in aug_specs]}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

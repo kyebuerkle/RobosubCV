@@ -388,22 +388,26 @@ def test_all_mode_correct_image_count(tmp_image, output_dir, tmp_path, error_csv
 		print(f"         expected {expected_out}, got {actual}")
 		print(f"         test node: {request.node.name}")
 
-	error_csv_writer(str(tmp_image.name), "all_mode_count", expected_out, actual)
-	assert actual == expected_out
+	#	+1 for the original image that is always copied into the output dir
+	expected_total = expected_out + 1
+	error_csv_writer(str(tmp_image.name), "all_mode_count", expected_total, actual)
+	assert actual == expected_total
 
-def test_all_mode_neutral_only_produces_no_output(tmp_image, output_dir, tmp_path, request):
-	"""all mode with only-neutral values writes zero images."""
+def test_all_mode_neutral_only_produces_no_augments(tmp_image, output_dir, tmp_path, request):
+	"""all mode with only-neutral values writes no augments, but the original is still copied."""
 	img_dir = _img_dir(tmp_path, tmp_image)
 	out_dir = _out(tmp_path, output_dir, "all_neutral")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _neutral_spec(), mode=MODE_ALL)
 
+	#	0 augments + 1 original = 1 total
 	actual = count_images(out_dir)
-	if actual != 0:
+	if actual != 1:
 		print(f"\n  [FAIL] image: {tmp_image}")
+		print(f"         expected 1 (original only), got {actual}")
 		print(f"         test node: {request.node.name}")
 
-	assert actual == 0
+	assert actual == 1
 
 def test_all_mode_output_images_readable(tmp_image, output_dir, tmp_path, request):
 	"""all mode output images can be read back by cv2."""
@@ -459,8 +463,10 @@ def test_random_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, e
 		print(f"         expected {num}, got {actual}")
 		print(f"         test node: {request.node.name}")
 
-	error_csv_writer(str(tmp_image.name), "random_mode_count", num, actual)
-	assert actual == num
+	#	+1 for the original image that is always copied into the output dir
+	expected_total = num + 1
+	error_csv_writer(str(tmp_image.name), "random_mode_count", expected_total, actual)
+	assert actual == expected_total
 
 def test_random_mode_no_neutral_combos(tmp_image, output_dir, tmp_path, request):
 	"""random mode never produces an output identical to the original."""
@@ -471,13 +477,16 @@ def test_random_mode_no_neutral_combos(tmp_image, output_dir, tmp_path, request)
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _basic_specs(), mode=MODE_RANDOM, num=3)
 
 	for f in out_dir.iterdir():
-		if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
-			diff = np.abs(source_img.astype(np.float32) - cv2.imread(str(f)).astype(np.float32))
-			is_identical = diff.mean() < 0.01
-			if is_identical:
-				print(f"\n  [FAIL] output identical to original: {f.name}")
-				print(f"         test node: {request.node.name}")
-			assert not is_identical, f"Output identical to original: {f.name}"
+		if f.suffix.lower() not in {".jpg", ".png", ".jpeg"}:
+			continue
+		if f.name == tmp_image.name:
+			continue	#	skip the original copy — it is intentionally identical
+		diff = np.abs(source_img.astype(np.float32) - cv2.imread(str(f)).astype(np.float32))
+		is_identical = diff.mean() < 0.01
+		if is_identical:
+			print(f"\n  [FAIL] augmented output identical to original: {f.name}")
+			print(f"         test node: {request.node.name}")
+		assert not is_identical, f"Augmented output identical to original: {f.name}"
 
 def test_random_mode_reproducible(tmp_image, output_dir, tmp_path, request):
 	"""random mode produces the same filenames on repeated runs (seeded by filename)."""
@@ -529,7 +538,8 @@ def test_random_mode_clamps_num_to_max_combos(tmp_image, output_dir, tmp_path, r
 		print(f"         expected <= 2, got {actual}")
 		print(f"         test node: {request.node.name}")
 
-	assert actual <= 2
+	#	+1 for the original; so clamped augments (<=2) + original = <=3 total
+	assert actual <= 3
 
 
 # ── Mode: calc ────────────────────────────────────────────────────────────────
@@ -551,8 +561,10 @@ def test_calc_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, err
 		print(f"         expected {num}, got {actual}")
 		print(f"         test node: {request.node.name}")
 
-	error_csv_writer(str(tmp_image.name), "calc_mode_count", num, actual)
-	assert actual == num
+	#	+1 for the original image that is always copied into the output dir
+	expected_total = num + 1
+	error_csv_writer(str(tmp_image.name), "calc_mode_count", expected_total, actual)
+	assert actual == expected_total
 
 def test_calc_mode_deterministic(tmp_image, output_dir, tmp_path, request):
 	"""calc mode produces identical filenames on repeated runs."""
@@ -588,9 +600,18 @@ def test_calc_mode_first_output_is_most_extreme(tmp_image, output_dir, tmp_path,
 	all_combos  = [c for c in itertools.product(*value_lists) if c != neutral]
 	all_combos.sort(key=_combo_score, reverse=True)
 
+	#	Exclude the original copy — its filename has no trailing integer index
+	def _is_augmented(f: Path) -> bool:
+		try:
+			int(f.stem.rsplit("_", 1)[-1])
+			return True
+		except ValueError:
+			return False
+
 	out_files = sorted(
-		[f for f in out_dir.iterdir() if f.suffix.lower() in {".jpg", ".png", ".jpeg"}],
-		key=lambda f: int(f.stem.rsplit("_", 1)[-1])	#	sort by trailing index digit
+		[f for f in out_dir.iterdir()
+		 if f.suffix.lower() in {".jpg", ".png", ".jpeg"} and _is_augmented(f)],
+		key=lambda f: int(f.stem.rsplit("_", 1)[-1])
 	)
 
 	if not out_files:
@@ -632,7 +653,8 @@ def test_calc_mode_wraps_when_num_exceeds_combos(tmp_image, output_dir, tmp_path
 		print(f"         files: {out_names}")
 		print(f"         test node: {request.node.name}")
 
-	assert actual == 5
+	#	5 augments + 1 original = 6 total
+	assert actual == 6
 	assert has_repeat_tag
 
 
@@ -706,5 +728,74 @@ def test_unknown_mode_falls_back_to_all(tmp_image, output_dir, tmp_path, request
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode="banana")
 
+	#	2 augments + 1 original = 3 total
 	actual = count_images(out_dir)
-	assert actual == 2
+	assert actual == 3
+
+# ── Original image is always preserved ───────────────────────────────────────
+
+def test_original_is_copied_to_output_all_mode(tmp_image, output_dir, tmp_path, request):
+	"""The source image is always present in the output dir — all mode."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "orig_all")
+
+	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_ALL)
+
+	original_in_output = (out_dir / tmp_image.name).exists()
+	if not original_in_output:
+		print(f"\n  [FAIL] original not found in output dir: {tmp_image.name}")
+		print(f"         test node: {request.node.name}")
+
+	assert original_in_output, f"Original '{tmp_image.name}' missing from output"
+
+def test_original_is_copied_to_output_random_mode(tmp_image, output_dir, tmp_path, request):
+	"""The source image is always present in the output dir — random mode."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "orig_random")
+
+	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_RANDOM, num=2)
+
+	original_in_output = (out_dir / tmp_image.name).exists()
+	if not original_in_output:
+		print(f"\n  [FAIL] original not found in output dir: {tmp_image.name}")
+		print(f"         test node: {request.node.name}")
+
+	assert original_in_output, f"Original '{tmp_image.name}' missing from output"
+
+def test_original_is_copied_to_output_calc_mode(tmp_image, output_dir, tmp_path, request):
+	"""The source image is always present in the output dir — calc mode."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "orig_calc")
+
+	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_CALC, num=2)
+
+	original_in_output = (out_dir / tmp_image.name).exists()
+	if not original_in_output:
+		print(f"\n  [FAIL] original not found in output dir: {tmp_image.name}")
+		print(f"         test node: {request.node.name}")
+
+	assert original_in_output, f"Original '{tmp_image.name}' missing from output"
+
+def test_original_pixel_values_unchanged(tmp_image, output_dir, tmp_path, request):
+	"""The copied original is pixel-identical to the source — not accidentally augmented."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "orig_pixels")
+
+	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_CALC, num=2)
+
+	source   = cv2.imread(str(tmp_image))
+	copy_out = out_dir / tmp_image.name
+
+	if not copy_out.exists():
+		print(f"\n  [FAIL] original not found in output: {tmp_image.name}")
+		print(f"         test node: {request.node.name}")
+		assert False, "Original not copied"
+
+	copy_img = cv2.imread(str(copy_out))
+	diff = np.abs(source.astype(np.float32) - copy_img.astype(np.float32)).mean()
+
+	if diff > 0.01:
+		print(f"\n  [FAIL] original copy differs from source (mean diff={diff:.4f})")
+		print(f"         test node: {request.node.name}")
+
+	assert diff <= 0.01, f"Original copy is not pixel-identical (mean diff={diff:.4f})"
