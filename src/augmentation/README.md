@@ -61,6 +61,15 @@ Image Augmentaion Subsystem. This system augments the training and validation im
   - name_format : format to name the augmented files
   - origin : origin point in pixels of where the scale is applied on the image
 
+###   Photometric 2
+
+This module has Claude code for multiple other photometric augmentations that I won't cover in detail since this a last minute addition. (This addition was from the first unsuccessful test of our Objectives, the model was oversampeled, so we made more ways to hopefully avoid that).
+The additions are:
+- contrast
+- gaussian blur
+- motion blur
+- hue shift
+
 ###   name_format
 
 name_format is a string input parameter into these functions, used to save the files in a specific manner. How it works is like a format string: "string_val{variable}". The variables to pick from are:

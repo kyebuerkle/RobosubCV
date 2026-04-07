@@ -40,6 +40,6 @@ echo "Running evaluate_yolo_labels.py..."
 poetry run python evaluate_yolo_labels.py -m "${MODELS[@]}" -d $DATASET --device $DEVICE --splits "${SPLIT[@]}"
 
 echo "Summarizing yolo results..."
-poetry run python summarize_yolo_results.py -d ./output -o summarized_yolo_results.csv
+poetry run python summarize_yolo_results.py -d ./output -o otuput/summarized_yolo_results.csv
 
 cd $HOME/RobosubCV/sbatch

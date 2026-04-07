@@ -6,14 +6,15 @@ Robosub Computer Vision is used for the Montana State University RoboCat's AUV t
 
 1. You have to setup your environment if you are using Tempest. Go through the **Model Creation: Setup** portion of the RoboSubCV Procedure.
    1. This will also setup your git and poetry. More notes on that are down below in the **Git & Poetry** section
-2. Configure your settings. Run this command:
+   2. If you have Anaconda, run this command (doesn't matter OS): `bash env_setup.sh`
+2. Configure your settings. Run this command inside the *Training* env:
    ```
    poetry run python src/model_training/setup_settings.py
    ```
    1. This will take you through a series of steps to configure your settings (I recomend pressing 'Enter' all the way through as it will keep the defaults)
 3. Go to your [roboflow](https://app.roboflow.com) account in a browser, and select which project and version of dataset you want to train off of. Then copy the URL.
 4. **IF** you are using Tempest, go to the `/sbatch/train.sbatch` script, and paste your roboflow URL in the *ROBOFLOW_URL* variable. Then run `sbatch sbatch/train.sbatch` to queue your Tempest job.
-4. **IF** you aren't using Tempest, type: `/src/train.py -u [URL]` and paste your URL in the *[URL]* spot. Run this script
+5. **IF** you aren't using Tempest, type: `/src/train.py -u [URL]` and paste your URL in the *[URL]* spot. Run this script
    1. NOTE: You are in charge of managing your GPU's, this script is currently set up for 2, so you will have to edit that in the script or add it as a parameter.
 
 ##		Git & Poetry
@@ -54,6 +55,7 @@ Install the poetry dependencies: (python poetry must be installed first)
 poetry install
 ```
 
+NOTE: with the environment config off for poetry, as long as you are in the *Training* env, you don't need use `poetry run`
 Run in poetry environment:
 ```
 poetry run <command>
