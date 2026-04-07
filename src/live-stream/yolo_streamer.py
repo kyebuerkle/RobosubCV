@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-YOLO Live Stream Viewer — CPU Edition
---------------------------------------
+YOLO Live Stream Viewer — CPU Edition  (with Object Tracking)
+---------------------------------------------------------------------
 Squeezes maximum FPS out of CPU-only inference via:
   - OpenCV thread tuning
   - Configurable inference size (imgsz)
@@ -11,9 +11,17 @@ Squeezes maximum FPS out of CPU-only inference via:
   - Threaded 3-stage pipeline: capture → infer → render
   - Camera buffer minimization to reduce latency
 
+Tracking features (via object_tracker.py):
+  - Centroid / IoU multi-object tracking
+  - Occlusion memory — keeps boxes alive when objects pass behind things
+  - Exponential bounding-box smoothing to eliminate jitter
+  - Majority-vote label smoothing to stop class flicker
+
 Requirements:
+    pip install ultralytics opencv-python pillow numpy
     pip install onnxruntime          ← optional but recommended for big speed boost
     pip install openvino             ← optional, Intel CPU further boost
+    object_tracker.py  ← must be in the same directory
 """
 
 import queue
@@ -26,6 +34,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 from ultralytics import YOLO
+
+from object_tracker import ObjectTracker
 
 
 # ──────────────────────────────────────────────
@@ -48,7 +58,6 @@ def get_cpu_info() -> tuple[str, int]:
     except Exception:
         pass
 
-    # Try to get a better name on Windows/Linux
     try:
         import subprocess, sys
         if sys.platform == "win32":
@@ -150,7 +159,7 @@ class YoloStreamApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("YOLO Live Stream — CPU Edition")
+        self.title("YOLO Live Stream — CPU Edition  ✦ Tracking")
         self.resizable(True, True)
         self.configure(bg="#1e1e2e")
 
@@ -170,10 +179,25 @@ class YoloStreamApp(tk.Tk):
         # ── Tuning variables ──
         self.confidence   = tk.DoubleVar(value=0.50)
         self.imgsz_var    = tk.IntVar(value=320)
-        self.skip_var     = tk.IntVar(value=2)          # infer every N frames
+        self.skip_var     = tk.IntVar(value=2)
         self.cv_threads   = tk.IntVar(value=max(1, CPU_CORES // 2))
         self.cam_res_var  = tk.StringVar(value="640x480")
-        self.backend_var  = tk.StringVar(value="pytorch")   # pytorch | onnx | openvino
+        self.backend_var  = tk.StringVar(value="pytorch")
+
+        # ── Tracking settings ──
+        self.tracking_enabled    = tk.BooleanVar(value=True)
+        self.iou_threshold_var   = tk.DoubleVar(value=0.30)
+        self.max_lost_frames_var = tk.IntVar(value=15)
+        self.smooth_alpha_var    = tk.DoubleVar(value=0.40)
+        self.label_smooth_var    = tk.IntVar(value=5)
+
+        # ── Shared tracker instance ──
+        self.tracker = ObjectTracker(
+            iou_threshold       = self.iou_threshold_var.get(),
+            max_lost_frames     = self.max_lost_frames_var.get(),
+            smooth_alpha        = self.smooth_alpha_var.get(),
+            label_smooth_frames = self.label_smooth_var.get(),
+        )
 
         # FPS tracking
         self._fps_times: list[float]       = []
@@ -181,7 +205,15 @@ class YoloStreamApp(tk.Tk):
 
         self._build_ui()
         self._refresh_cameras()
-        self._apply_cv_threads()   # apply thread count on startup
+        self._apply_cv_threads()
+
+    # ── Sync tracker params from UI vars ─────
+
+    def _sync_tracker(self, *_):
+        self.tracker.iou_threshold       = self.iou_threshold_var.get()
+        self.tracker.max_lost_frames     = self.max_lost_frames_var.get()
+        self.tracker.smooth_alpha        = self.smooth_alpha_var.get()
+        self.tracker.label_smooth_frames = self.label_smooth_var.get()
 
     # ─────────────────────────────────────────
     #  UI
@@ -197,13 +229,13 @@ class YoloStreamApp(tk.Tk):
 
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TFrame",      background=PANEL_BG)
-        style.configure("TLabel",      background=PANEL_BG, foreground=FG,  font=("Segoe UI", 10))
-        style.configure("TButton",     background=BTN_BG,   foreground=FG,  font=("Segoe UI", 10), borderwidth=0)
-        style.configure("TScale",      background=PANEL_BG)
-        style.configure("TCombobox",   fieldbackground=BTN_BG, background=BTN_BG, foreground=FG)
-        style.configure("TRadiobutton",background=PANEL_BG, foreground=FG,  font=("Segoe UI", 9))
-        style.configure("TCheckbutton",background=PANEL_BG, foreground=FG)
+        style.configure("TFrame",       background=PANEL_BG)
+        style.configure("TLabel",       background=PANEL_BG, foreground=FG,  font=("Segoe UI", 10))
+        style.configure("TButton",      background=BTN_BG,   foreground=FG,  font=("Segoe UI", 10), borderwidth=0)
+        style.configure("TScale",       background=PANEL_BG)
+        style.configure("TCombobox",    fieldbackground=BTN_BG, background=BTN_BG, foreground=FG)
+        style.configure("TRadiobutton", background=PANEL_BG, foreground=FG,  font=("Segoe UI", 9))
+        style.configure("TCheckbutton", background=PANEL_BG, foreground=FG)
         style.configure("Accent.TButton", background=ACCENT, foreground="#1e1e2e",
                         font=("Segoe UI", 10, "bold"))
         style.map("TButton",        background=[("active", ACCENT)])
@@ -217,12 +249,27 @@ class YoloStreamApp(tk.Tk):
             ttk.Label(parent, text=text, foreground="#6c7086",
                       font=("Segoe UI", 8)).pack(anchor="w")
 
+        def slider_row(parent, var, lo, hi, fmt="{:.2f}"):
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=2)
+            lbl = ttk.Label(row, text=fmt.format(var.get()), width=7)
+            lbl.pack(side=tk.RIGHT)
+
+            def _update(v):
+                lbl.configure(text=fmt.format(float(v) if "." in fmt else int(float(v))))
+                self._sync_tracker()
+
+            ttk.Scale(row, from_=lo, to=hi, variable=var,
+                      orient=tk.HORIZONTAL, command=_update
+                      ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+            return row, lbl
+
         # ── Scrollable left panel ──────────────
-        left_outer = tk.Frame(self, bg=PANEL_BG, width=260)
+        left_outer = tk.Frame(self, bg=PANEL_BG, width=270)
         left_outer.pack(side=tk.LEFT, fill=tk.Y)
         left_outer.pack_propagate(False)
 
-        canvas_scroll = tk.Canvas(left_outer, bg=PANEL_BG, highlightthickness=0, width=255)
+        canvas_scroll = tk.Canvas(left_outer, bg=PANEL_BG, highlightthickness=0, width=265)
         scrollbar = ttk.Scrollbar(left_outer, orient="vertical", command=canvas_scroll.yview)
         canvas_scroll.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -243,11 +290,11 @@ class YoloStreamApp(tk.Tk):
 
         # ── CPU badge ──
         tk.Label(ctrl, text=f"🖥  {CPU_NAME}", bg=PANEL_BG, fg=WARN,
-                 font=("Segoe UI", 8, "bold"), wraplength=220,
+                 font=("Segoe UI", 8, "bold"), wraplength=240,
                  justify=tk.LEFT).pack(anchor="w", pady=(0, 2))
         tk.Label(ctrl, text=f"Logical cores: {CPU_CORES}", bg=PANEL_BG,
                  fg="#6c7086", font=("Segoe UI", 8)).pack(anchor="w")
-        
+
         # ── Backend ──
         section(ctrl, "Inference backend")
         hint(ctrl, "ONNX / OpenVINO are faster on CPU than PyTorch")
@@ -269,7 +316,7 @@ class YoloStreamApp(tk.Tk):
         # ── Model ──
         section(ctrl, "Model")
         ttk.Label(ctrl, textvariable=self.model_path_str,
-                  wraplength=220, foreground="#a6e3a1").pack(anchor="w")
+                  wraplength=230, foreground="#a6e3a1").pack(anchor="w")
         ttk.Button(ctrl, text="Browse .pt file…",
                    command=self._browse_model).pack(fill=tk.X, pady=4)
 
@@ -340,6 +387,56 @@ class YoloStreamApp(tk.Tk):
                       self._apply_cv_threads()
                   )).pack(side=tk.LEFT, expand=True, fill=tk.X)
 
+        # ═══════════════════════════════════════
+        #  TRACKING SECTION
+        # ═══════════════════════════════════════
+        section(ctrl, "━━  Object Tracking  ━━")
+        ttk.Checkbutton(ctrl, text="Enable tracking & smoothing",
+                        variable=self.tracking_enabled).pack(anchor="w", pady=(0, 4))
+
+        # IoU threshold
+        hint(ctrl, "Match threshold (IoU) — higher = stricter matching")
+        slider_row(ctrl, self.iou_threshold_var, 0.05, 0.90, "{:.2f}")
+
+        # Max lost frames (occlusion memory)
+        section(ctrl, "Occlusion memory (frames)")
+        hint(ctrl, "Frames a hidden track stays alive behind an object")
+        lost_row = ttk.Frame(ctrl)
+        lost_row.pack(fill=tk.X, pady=2)
+        lost_lbl = ttk.Label(lost_row, text=str(self.max_lost_frames_var.get()), width=5)
+        lost_lbl.pack(side=tk.RIGHT)
+
+        def _lost_update(v):
+            lost_lbl.configure(text=str(int(float(v))))
+            self._sync_tracker()
+
+        ttk.Scale(lost_row, from_=0, to=60, variable=self.max_lost_frames_var,
+                  orient=tk.HORIZONTAL, command=_lost_update
+                  ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        # Box smoothing alpha
+        section(ctrl, "Box smoothing  (alpha)")
+        hint(ctrl, "0 = frozen / no update,  1 = raw / jumpy")
+        slider_row(ctrl, self.smooth_alpha_var, 0.01, 1.0, "{:.2f}")
+
+        # Label smoothing window
+        section(ctrl, "Label smoothing window (frames)")
+        hint(ctrl, "Majority-vote over last N frames to stabilise class")
+        lbl_win_row = ttk.Frame(ctrl)
+        lbl_win_row.pack(fill=tk.X, pady=2)
+        lbl_win_lbl = ttk.Label(lbl_win_row, text=str(self.label_smooth_var.get()), width=5)
+        lbl_win_lbl.pack(side=tk.RIGHT)
+
+        def _lbl_win_update(v):
+            lbl_win_lbl.configure(text=str(int(float(v))))
+            self._sync_tracker()
+
+        ttk.Scale(lbl_win_row, from_=1, to=30, variable=self.label_smooth_var,
+                  orient=tk.HORIZONTAL, command=_lbl_win_update
+                  ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        ttk.Button(ctrl, text="Reset Tracks", command=self.tracker.reset).pack(fill=tk.X, pady=4)
+
         # ── Stream controls ──
         section(ctrl, "Stream")
         self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
@@ -377,22 +474,23 @@ class YoloStreamApp(tk.Tk):
 
         # ── Stats ──
         section(ctrl, "Performance stats")
-        self.fps_var = tk.StringVar(value="Display: — fps\nInfer:   — fps\nLatency: — ms")
+        self.fps_var = tk.StringVar(value="Display: — fps\nInfer:   — fps\nLatency: — ms\nTracks:  —")
         tk.Label(ctrl, textvariable=self.fps_var, bg=PANEL_BG, fg="#a6e3a1",
                  font=("Consolas", 10), justify=tk.LEFT).pack(anchor="w")
 
         # ── Status ──
         self.status_var = tk.StringVar(value="Ready — load a model and select a camera.")
         tk.Label(ctrl, textvariable=self.status_var, bg=PANEL_BG, fg="#f38ba8",
-                 wraplength=220, justify=tk.LEFT,
+                 wraplength=240, justify=tk.LEFT,
                  font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
 
-        # ── Tips box ──
+        # ── CPU tips ──
         section(ctrl, "CPU tips")
         tips = (
             "• Use ONNX backend if available\n"
             "• imgsz 320 is the sweet spot\n"
             "• Frame skip 2–3 feels smooth\n"
+            "• Tracking hides skip jitter\n"
             "• Try yolov8s or yolov8n models\n"
             "• Lower camera res reduces\n"
             "  resize overhead"
@@ -448,7 +546,6 @@ class YoloStreamApp(tk.Tk):
 
             backend = self.backend_var.get()
 
-            # Export to ONNX / OpenVINO if needed and .pt was selected
             if path.endswith(".pt") and backend in ("onnx", "openvino"):
                 self.status_var.set(f"Exporting to {backend.upper()}… (one-time, please wait)")
                 self.update_idletasks()
@@ -462,7 +559,6 @@ class YoloStreamApp(tk.Tk):
             self.model = YOLO(path)
             self._loaded_pt_path = path
 
-            # Warmup
             self.status_var.set("Warming up model…")
             self.update_idletasks()
             dummy = np.zeros((self.imgsz_var.get(), self.imgsz_var.get(), 3), dtype=np.uint8)
@@ -549,7 +645,7 @@ class YoloStreamApp(tk.Tk):
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  cam_w)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_h)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # low buffer = low latency
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not self.cap.isOpened():
             messagebox.showerror("Camera error", f"Could not open camera {cam_index}.")
@@ -557,6 +653,8 @@ class YoloStreamApp(tk.Tk):
 
         self._raw_queue     = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
         self._display_queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
+        self.tracker.reset()
+        self._sync_tracker()
 
         self.streaming = True
         self.start_btn.configure(state=tk.DISABLED)
@@ -575,6 +673,7 @@ class YoloStreamApp(tk.Tk):
         if self.cap:
             self.cap.release()
             self.cap = None
+        self.tracker.reset()
         self.start_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self.canvas.delete("all")
@@ -597,7 +696,7 @@ class YoloStreamApp(tk.Tk):
             self._raw_queue.put(frame)
 
     # ─────────────────────────────────────────
-    #  Thread 2 — inference
+    #  Thread 2 — inference + tracking
     # ─────────────────────────────────────────
 
     def _infer_thread(self):
@@ -634,23 +733,29 @@ class YoloStreamApp(tk.Tk):
                 if len(self._infer_fps_times) > 30:
                     self._infer_fps_times.pop(0)
 
-                # Scale boxes back to original frame resolution
                 orig_h, orig_w = frame.shape[:2]
                 sx = orig_w / imgsz
                 sy = orig_h / imgsz
 
-                last_boxes = []
+                raw_boxes = []
                 for result in results:
                     for box in result.boxes:
                         cls_id     = int(box.cls[0])
                         label      = self.model.names.get(cls_id, str(cls_id))
                         conf_score = float(box.conf[0])
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        last_boxes.append((
+                        raw_boxes.append((
                             label, conf_score,
                             int(x1 * sx), int(y1 * sy),
                             int(x2 * sx), int(y2 * sy),
                         ))
+
+                # ── Tracking / smoothing ──────────────
+                if self.tracking_enabled.get():
+                    last_boxes = self.tracker.update(raw_boxes)
+                else:
+                    self.tracker.reset()
+                    last_boxes = raw_boxes
 
             # Draw on full-res frame
             annotated = frame.copy()
@@ -661,22 +766,23 @@ class YoloStreamApp(tk.Tk):
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thick)
                 text = f"{label} {conf_score:.2f}"
                 (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-                cv2.rectangle(annotated, (x1, y2), (x1 + tw + 4, y2 + th + 8), color, -1)
-                cv2.putText(annotated, text, (x1 + 2, y2 + th + 4),
+                cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+                cv2.putText(annotated, text, (x1 + 2, y1 - 4),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
-            # Latency overlay (bottom-left)
+            # Latency overlay
             cv2.putText(annotated, f"Infer: {last_infer_ms:.0f}ms",
                         (8, annotated.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (137, 180, 250), 1, cv2.LINE_AA)
 
+            n_tracks = len(last_boxes)
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             if self._display_queue.full():
                 try:
                     self._display_queue.get_nowait()
                 except queue.Empty:
                     pass
-            self._display_queue.put(rgb)
+            self._display_queue.put((rgb, n_tracks, last_infer_ms))
 
     # ─────────────────────────────────────────
     #  Render loop (main thread)
@@ -687,9 +793,9 @@ class YoloStreamApp(tk.Tk):
             return
 
         try:
-            frame = self._display_queue.get_nowait()
+            frame, n_tracks, last_infer_ms = self._display_queue.get_nowait()
         except queue.Empty:
-            frame = None
+            frame, n_tracks, last_infer_ms = None, None, 0.0
 
         if frame is not None:
             now = time.perf_counter()
@@ -705,7 +811,6 @@ class YoloStreamApp(tk.Tk):
                 self.canvas.create_image(0, 0, anchor="nw", image=photo, tags="frame")
                 self.canvas.image = photo
 
-            # Compute FPS
             disp_fps  = 0.0
             infer_fps = 0.0
             if len(self._fps_times) >= 2:
@@ -715,11 +820,12 @@ class YoloStreamApp(tk.Tk):
                 infer_fps = (len(self._infer_fps_times) - 1) / (
                     self._infer_fps_times[-1] - self._infer_fps_times[0])
 
-            infer_ms = (1000 / infer_fps) if infer_fps > 0 else 0
+            infer_ms = (1000 / infer_fps) if infer_fps > 0 else last_infer_ms
             self.fps_var.set(
                 f"Display: {disp_fps:5.1f} fps\n"
                 f"Infer:   {infer_fps:5.1f} fps\n"
-                f"Latency: {infer_ms:5.0f} ms"
+                f"Latency: {infer_ms:5.0f} ms\n"
+                f"Tracks:  {n_tracks if n_tracks is not None else '—'}"
             )
 
         self.after(self.RENDER_DELAY_MS, self._render_loop)
