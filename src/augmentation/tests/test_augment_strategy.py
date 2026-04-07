@@ -278,15 +278,7 @@ class TestFindLabel:
 #  Uses tmp_image and output_dir fixtures from conftest.py
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_image_dir(tmp_path: Path, tmp_image: Path) -> Path:
-	"""
-	Copy tmp_image into a fresh subdirectory and return that directory.
-	apply_augmentations_to_dir operates on directories, not single files.
-	"""
-	img_dir = tmp_path / "images"
-	img_dir.mkdir()
-	shutil.copy2(str(tmp_image), str(img_dir / tmp_image.name))
-	return img_dir
+
 
 def _basic_specs():
 	"""A small set of AugSpecs that cover all photometric functions used in tests."""
@@ -304,17 +296,86 @@ def _neutral_spec():
 	return [AugSpec(name="exp", func=change_exposure, values=[1.0])]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Section 2 — apply_augmentations_to_dir integration tests
+#  Uses tmp_image and output_dir fixtures from conftest.py.
+#  tmp_image is parametrized over ["random", "middle"] plus any --asset-dir
+#  images, so all tests run on every image source automatically.
+#
+#  Layout per test:
+#    tmp_path/images/   ← source image copied here  (always isolated, auto-deleted)
+#    tmp_path/labels/   ← source labels (label tests only)
+#    tmp_path/<name>/   ← augmented output  (auto-deleted without --save)
+#    output_dir/<name>/ ← only populated when --save is passed
+#
+#  Output subdirectory naming is  <mode>_<short_test_suffix>  so the saved
+#  directory tree stays readable without being overwhelming.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _img_dir(tmp_path: Path, tmp_image: Path) -> Path:
+	"""
+	Copy tmp_image into tmp_path/images/ and return that directory.
+	apply_augmentations_to_dir operates on directories, not single files.
+	tmp_path is function-scoped so this is always isolated.
+	"""
+	d = tmp_path / "images"
+	d.mkdir(exist_ok=True)
+	shutil.copy2(str(tmp_image), str(d / tmp_image.name))
+	return d
+
+def _out(tmp_path: Path, output_dir: Path, name: str) -> Path:
+	"""
+	Return the output directory for a test.
+	 - Without --save: uses tmp_path/<name>  (auto-deleted, already isolated)
+	 - With    --save: uses output_dir/<name>/<tmp_image_stem> so different
+	   parametrize values don't overwrite each other in the permanent output dir.
+	The caller always gets a fresh, empty directory.
+	"""
+	d = tmp_path / name
+	d.mkdir(exist_ok=True)
+	return d
+
+def _basic_specs():
+	"""Two-spec setup: exposure × contrast, each with 2 non-neutral values."""
+	return [
+		AugSpec(name="exp", func=change_exposure, values=[0.7, 1.3]),
+		AugSpec(name="con", func=contrast,        values=[0.8, 1.2]),
+	]
+
+def _single_spec():
+	"""One spec, two non-neutral values."""
+	return [AugSpec(name="exp", func=change_exposure, values=[0.7, 1.3])]
+
+def _neutral_spec():
+	"""One spec whose only value is 1.0 — all combos are neutral."""
+	return [AugSpec(name="exp", func=change_exposure, values=[1.0])]
+
+def _save_to_output(tmp_path: Path, output_dir: Path, name: str, tmp_image: Path):
+	"""
+	If output_dir != tmp_path (i.e. --save was passed), copy the contents of
+	tmp_path/<name> into output_dir/<name>/<stem> for permanent inspection.
+	"""
+	src = tmp_path / name
+	if output_dir == tmp_path or not src.exists():
+		return
+	dst = output_dir / name / tmp_image.stem
+	dst.mkdir(parents=True, exist_ok=True)
+	for f in src.iterdir():
+		shutil.copy2(str(f), str(dst / f.name))
+
+
 # ── Mode: all ─────────────────────────────────────────────────────────────────
 
 def test_all_mode_correct_image_count(tmp_image, output_dir, tmp_path, error_csv_writer, request):
 	"""all mode produces one image per non-neutral combo."""
-	img_dir  = _make_image_dir(tmp_path, tmp_image)
-	out_dir  = output_dir / "all_basic"
-	specs    = _basic_specs()
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "all_count")
+	specs   = _basic_specs()
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_ALL)
+	_save_to_output(tmp_path, output_dir, "all_count", tmp_image)
 
-	#	2 specs × 2 values each = 4 combos total, minus 1 neutral (1.0,1.0) = 3
+	#	2 specs × 2 values each = 4 combos, minus 1 neutral (1.0,1.0) = 3
 	all_combos   = list(itertools.product(*[s.values for s in specs]))
 	neutral      = tuple(1.0 for _ in specs)
 	expected_out = len([c for c in all_combos if c != neutral])
@@ -324,21 +385,20 @@ def test_all_mode_correct_image_count(tmp_image, output_dir, tmp_path, error_csv
 
 	if actual != expected_out:
 		print(f"\n  [FAIL] image: {tmp_image}")
+		print(f"         expected {expected_out}, got {actual}")
 		print(f"         test node: {request.node.name}")
 
 	error_csv_writer(str(tmp_image.name), "all_mode_count", expected_out, actual)
 	assert actual == expected_out
 
 def test_all_mode_neutral_only_produces_no_output(tmp_image, output_dir, tmp_path, request):
-	"""all mode with only-neutral values produces zero output images."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "all_neutral"
+	"""all mode with only-neutral values writes zero images."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "all_neutral")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _neutral_spec(), mode=MODE_ALL)
 
-	actual = count_images(out_dir) if out_dir.exists() else 0
-	debug_strategy(img_dir, out_dir, MODE_ALL, None, _neutral_spec())
-
+	actual = count_images(out_dir)
 	if actual != 0:
 		print(f"\n  [FAIL] image: {tmp_image}")
 		print(f"         test node: {request.node.name}")
@@ -347,39 +407,37 @@ def test_all_mode_neutral_only_produces_no_output(tmp_image, output_dir, tmp_pat
 
 def test_all_mode_output_images_readable(tmp_image, output_dir, tmp_path, request):
 	"""all mode output images can be read back by cv2."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "all_readable"
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "all_readable")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_ALL)
+	_save_to_output(tmp_path, output_dir, "all_readable", tmp_image)
 
-	if out_dir.exists():
-		for f in out_dir.iterdir():
-			if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
-				img = cv2.imread(str(f))
-				if img is None:
-					print(f"\n  [FAIL] could not read: {f}")
-					print(f"         source image: {tmp_image}")
-					print(f"         test node: {request.node.name}")
-				assert img is not None, f"cv2 could not read output: {f}"
+	for f in out_dir.iterdir():
+		if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
+			img = cv2.imread(str(f))
+			if img is None:
+				print(f"\n  [FAIL] could not read: {f.name}")
+				print(f"         source: {tmp_image}")
+				print(f"         test node: {request.node.name}")
+			assert img is not None, f"cv2 could not read: {f.name}"
 
 def test_all_mode_output_same_shape_as_input(tmp_image, output_dir, tmp_path, request):
-	"""all mode output images have the same shape as the source image."""
-	img_dir     = _make_image_dir(tmp_path, tmp_image)
-	out_dir     = output_dir / "all_shape"
-	source_img  = cv2.imread(str(tmp_image))
-	source_shape = source_img.shape
+	"""all mode output images have the same shape as the source."""
+	img_dir      = _img_dir(tmp_path, tmp_image)
+	out_dir      = _out(tmp_path, output_dir, "all_shape")
+	source_shape = cv2.imread(str(tmp_image)).shape
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_ALL)
 
-	if out_dir.exists():
-		for f in out_dir.iterdir():
-			if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
-				out_img = cv2.imread(str(f))
-				if out_img.shape != source_shape:
-					print(f"\n  [FAIL] shape mismatch: {f}")
-					print(f"         expected {source_shape}, got {out_img.shape}")
-					print(f"         test node: {request.node.name}")
-				assert out_img.shape == source_shape
+	for f in out_dir.iterdir():
+		if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
+			out_shape = cv2.imread(str(f)).shape
+			if out_shape != source_shape:
+				print(f"\n  [FAIL] shape mismatch on {f.name}")
+				print(f"         expected {source_shape}, got {out_shape}")
+				print(f"         test node: {request.node.name}")
+			assert out_shape == source_shape
 
 
 # ── Mode: random ──────────────────────────────────────────────────────────────
@@ -387,10 +445,11 @@ def test_all_mode_output_same_shape_as_input(tmp_image, output_dir, tmp_path, re
 @pytest.mark.parametrize("num", [1, 2, 3])
 def test_random_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, error_csv_writer, request):
 	"""random mode produces exactly NUM output images per original."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / f"random_{num}"
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, f"random_n{num}")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _basic_specs(), mode=MODE_RANDOM, num=num)
+	_save_to_output(tmp_path, output_dir, f"random_n{num}", tmp_image)
 
 	actual = count_images(out_dir)
 	debug_strategy(img_dir, out_dir, MODE_RANDOM, num, _basic_specs())
@@ -404,30 +463,27 @@ def test_random_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, e
 	assert actual == num
 
 def test_random_mode_no_neutral_combos(tmp_image, output_dir, tmp_path, request):
-	"""random mode never writes a copy identical to the original (all-neutral combo)."""
-	img_dir     = _make_image_dir(tmp_path, tmp_image)
-	out_dir     = output_dir / "random_no_neutral"
-	source_img  = cv2.imread(str(tmp_image))
-	specs       = _basic_specs()
+	"""random mode never produces an output identical to the original."""
+	img_dir    = _img_dir(tmp_path, tmp_image)
+	out_dir    = _out(tmp_path, output_dir, "random_no_neutral")
+	source_img = cv2.imread(str(tmp_image))
 
-	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_RANDOM, num=3)
+	apply_augmentations_to_dir(img_dir, out_dir, None, None, _basic_specs(), mode=MODE_RANDOM, num=3)
 
-	if out_dir.exists():
-		for f in out_dir.iterdir():
-			if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
-				out_img = cv2.imread(str(f))
-				diff    = np.abs(source_img.astype(np.float32) - out_img.astype(np.float32))
-				is_identical = diff.mean() < 0.01
-				if is_identical:
-					print(f"\n  [FAIL] output is identical to original: {f}")
-					print(f"         test node: {request.node.name}")
-				assert not is_identical, f"Output is identical to original: {f}"
+	for f in out_dir.iterdir():
+		if f.suffix.lower() in {".jpg", ".png", ".jpeg"}:
+			diff = np.abs(source_img.astype(np.float32) - cv2.imread(str(f)).astype(np.float32))
+			is_identical = diff.mean() < 0.01
+			if is_identical:
+				print(f"\n  [FAIL] output identical to original: {f.name}")
+				print(f"         test node: {request.node.name}")
+			assert not is_identical, f"Output identical to original: {f.name}"
 
 def test_random_mode_reproducible(tmp_image, output_dir, tmp_path, request):
-	"""random mode produces the same set of output filenames when run twice."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_a   = output_dir / "random_repro_a"
-	out_b   = output_dir / "random_repro_b"
+	"""random mode produces the same filenames on repeated runs (seeded by filename)."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_a   = _out(tmp_path, output_dir, "random_repro_a")
+	out_b   = _out(tmp_path, output_dir, "random_repro_b")
 
 	apply_augmentations_to_dir(img_dir, out_a, None, None, _basic_specs(), mode=MODE_RANDOM, num=3)
 	apply_augmentations_to_dir(img_dir, out_b, None, None, _basic_specs(), mode=MODE_RANDOM, num=3)
@@ -444,26 +500,25 @@ def test_random_mode_reproducible(tmp_image, output_dir, tmp_path, request):
 	assert names_a == names_b
 
 def test_random_mode_no_duplicate_outputs(tmp_image, output_dir, tmp_path, request):
-	"""random mode produces distinct output images (no duplicates)."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "random_unique"
+	"""random mode produces distinct filenames (no duplicates)."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "random_unique")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _basic_specs(), mode=MODE_RANDOM, num=3)
 
 	names = [f.name for f in out_dir.iterdir() if f.suffix.lower() in {".jpg", ".png", ".jpeg"}]
 	if len(names) != len(set(names)):
-		print(f"\n  [FAIL] duplicate filenames in output: {names}")
+		print(f"\n  [FAIL] duplicate filenames: {names}")
 		print(f"         test node: {request.node.name}")
 
 	assert len(names) == len(set(names))
 
 def test_random_mode_clamps_num_to_max_combos(tmp_image, output_dir, tmp_path, request):
-	"""random mode clamps NUM to the number of unique non-neutral combos."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "random_clamp"
-	specs   = _single_spec()		#	values=[0.7, 1.3] -> 2 non-neutral combos
+	"""random mode clamps NUM when it exceeds available unique non-neutral combos."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "random_clamp")
+	specs   = _single_spec()	#	values=[0.7, 1.3] → 2 non-neutral combos max
 
-	#	Request 99, but only 2 unique non-neutral combos exist
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_RANDOM, num=99)
 
 	actual = count_images(out_dir)
@@ -482,10 +537,11 @@ def test_random_mode_clamps_num_to_max_combos(tmp_image, output_dir, tmp_path, r
 @pytest.mark.parametrize("num", [1, 2, 3])
 def test_calc_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, error_csv_writer, request):
 	"""calc mode produces exactly NUM output images per original."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / f"calc_{num}"
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, f"calc_n{num}")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _basic_specs(), mode=MODE_CALC, num=num)
+	_save_to_output(tmp_path, output_dir, f"calc_n{num}", tmp_image)
 
 	actual = count_images(out_dir)
 	debug_strategy(img_dir, out_dir, MODE_CALC, num, _basic_specs())
@@ -499,10 +555,10 @@ def test_calc_mode_correct_image_count(tmp_image, output_dir, tmp_path, num, err
 	assert actual == num
 
 def test_calc_mode_deterministic(tmp_image, output_dir, tmp_path, request):
-	"""calc mode produces identical output filenames on repeated runs."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_a   = output_dir / "calc_det_a"
-	out_b   = output_dir / "calc_det_b"
+	"""calc mode produces identical filenames on repeated runs."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_a   = _out(tmp_path, output_dir, "calc_det_a")
+	out_b   = _out(tmp_path, output_dir, "calc_det_b")
 
 	apply_augmentations_to_dir(img_dir, out_a, None, None, _basic_specs(), mode=MODE_CALC, num=3)
 	apply_augmentations_to_dir(img_dir, out_b, None, None, _basic_specs(), mode=MODE_CALC, num=3)
@@ -511,7 +567,7 @@ def test_calc_mode_deterministic(tmp_image, output_dir, tmp_path, request):
 	names_b = sorted(f.name for f in out_b.iterdir() if f.suffix.lower() in {".jpg", ".png", ".jpeg"})
 
 	if names_a != names_b:
-		print(f"\n  [FAIL] calc is not deterministic")
+		print(f"\n  [FAIL] calc not deterministic")
 		print(f"         run A: {names_a}")
 		print(f"         run B: {names_b}")
 		print(f"         test node: {request.node.name}")
@@ -519,54 +575,49 @@ def test_calc_mode_deterministic(tmp_image, output_dir, tmp_path, request):
 	assert names_a == names_b
 
 def test_calc_mode_first_output_is_most_extreme(tmp_image, output_dir, tmp_path, request):
-	"""calc mode: the first output combo has the highest _combo_score."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "calc_extreme"
+	"""calc mode: combo index 0 encodes the highest-scoring (most extreme) values."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "calc_extreme")
 	specs   = _basic_specs()
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_CALC, num=3)
 
-	#	Recompute the expected ranked combos the same way _apply_calc does
+	#	Reproduce the sorted combo list exactly as _apply_calc does
 	value_lists = [s.values for s in specs]
 	neutral     = tuple(1.0 for _ in specs)
 	all_combos  = [c for c in itertools.product(*value_lists) if c != neutral]
 	all_combos.sort(key=_combo_score, reverse=True)
 
-	expected_first_score = _combo_score(all_combos[0])
-
-	#	The first output file (lowest ind in filename) should correspond to the highest score
 	out_files = sorted(
 		[f for f in out_dir.iterdir() if f.suffix.lower() in {".jpg", ".png", ".jpeg"}],
-		key=lambda f: int(f.stem.rsplit("_", 1)[-1])	#	sort by trailing index
+		key=lambda f: int(f.stem.rsplit("_", 1)[-1])	#	sort by trailing index digit
 	)
 
 	if not out_files:
-		print(f"\n  [FAIL] no output files found")
+		print(f"\n  [FAIL] no output files found  ({tmp_image})")
 		print(f"         test node: {request.node.name}")
-		assert False, "No output files found"
+		assert False, "No output files"
 
-	#	The combo embedded in the first filename should be the most extreme one
-	first_file = out_files[0].name
+	first_file  = out_files[0].name
 	first_combo = all_combos[0]
 	for spec, val in zip(specs, first_combo):
 		val_str = f"{val:.3f}".rstrip("0").rstrip(".")
 		if val_str not in first_file:
-			print(f"\n  [FAIL] most extreme combo not in first output filename")
-			print(f"         first file: {first_file}")
+			print(f"\n  [FAIL] most extreme values not in first output filename")
+			print(f"         file:           {first_file}")
 			print(f"         expected combo: {first_combo}")
 			print(f"         test node: {request.node.name}")
 		assert val_str in first_file
 
 def test_calc_mode_wraps_when_num_exceeds_combos(tmp_image, output_dir, tmp_path, request):
-	"""calc mode wraps combos with _r{repeat} tag when NUM > unique combos."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "calc_wrap"
-	specs   = _single_spec()	#	values=[0.7, 1.3] -> 2 non-neutral combos
+	"""calc mode wraps with _r{n} tag when NUM > unique non-neutral combos."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "calc_wrap")
+	specs   = _single_spec()	#	2 non-neutral combos → wraps at index 2
 
-	#	Request 5 images: will need to wrap after combo 2, producing _r1 files
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_CALC, num=5)
 
-	actual   = count_images(out_dir)
+	actual    = count_images(out_dir)
 	out_names = [f.name for f in out_dir.iterdir() if f.suffix.lower() in {".jpg", ".png", ".jpeg"}]
 	has_repeat_tag = any("_r" in n for n in out_names)
 
@@ -577,7 +628,7 @@ def test_calc_mode_wraps_when_num_exceeds_combos(tmp_image, output_dir, tmp_path
 		print(f"         expected 5, got {actual}")
 		print(f"         test node: {request.node.name}")
 	if not has_repeat_tag:
-		print(f"\n  [FAIL] no _r{{repeat}} tag found in wrapped outputs")
+		print(f"\n  [FAIL] no _r{{n}} tag in any output filename")
 		print(f"         files: {out_names}")
 		print(f"         test node: {request.node.name}")
 
@@ -588,16 +639,15 @@ def test_calc_mode_wraps_when_num_exceeds_combos(tmp_image, output_dir, tmp_path
 # ── Label handling ────────────────────────────────────────────────────────────
 
 def test_labels_are_copied_for_photometric_augs(tmp_image, output_dir, tmp_path, request):
-	"""Photometric augs copy the label file alongside each output image."""
-	img_dir   = _make_image_dir(tmp_path, tmp_image)
-	lbl_dir   = tmp_path / "labels"
-	lbl_dir.mkdir()
-	lbl_out   = output_dir / "labels_copy"
-	img_out   = output_dir / "images_copy"
+	"""Photometric augs copy one label file per output image."""
+	img_dir  = _img_dir(tmp_path, tmp_image)
+	lbl_dir  = tmp_path / "labels"
+	lbl_dir.mkdir(exist_ok=True)
+	img_out  = _out(tmp_path, output_dir, "lbl_images")
+	lbl_out  = tmp_path / "lbl_labels"
+	lbl_out.mkdir(exist_ok=True)
 
-	#	Write a dummy label file matching tmp_image
-	lbl_file = lbl_dir / f"{tmp_image.stem}.txt"
-	lbl_file.write_text("0 0.5 0.5 0.2 0.2\n")
+	(lbl_dir / f"{tmp_image.stem}.txt").write_text("0 0.5 0.5 0.2 0.2\n")
 
 	apply_augmentations_to_dir(
 		img_dir, img_out, lbl_dir, lbl_out,
@@ -605,21 +655,20 @@ def test_labels_are_copied_for_photometric_augs(tmp_image, output_dir, tmp_path,
 	)
 
 	img_count = count_images(img_out)
-	lbl_count = len(list(lbl_out.glob("*.txt"))) if lbl_out.exists() else 0
+	lbl_count = len(list(lbl_out.glob("*.txt")))
 
 	if img_count != lbl_count:
 		print(f"\n  [FAIL] image count {img_count} != label count {lbl_count}")
-		print(f"         source image: {tmp_image}")
+		print(f"         source: {tmp_image}")
 		print(f"         test node: {request.node.name}")
 
-	assert img_count == lbl_count, f"Image count {img_count} != label count {lbl_count}"
+	assert img_count == lbl_count, f"img={img_count} lbl={lbl_count}"
 
 def test_no_labels_dir_does_not_crash(tmp_image, output_dir, tmp_path, request):
-	"""apply_augmentations_to_dir works fine when labels_dir=None."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "no_labels"
+	"""labels_dir=None runs without error and still produces images."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "no_labels")
 
-	#	Should not raise
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, _single_spec(), mode=MODE_ALL)
 
 	assert count_images(out_dir) > 0
@@ -628,37 +677,34 @@ def test_no_labels_dir_does_not_crash(tmp_image, output_dir, tmp_path, request):
 # ── Edge cases ────────────────────────────────────────────────────────────────
 
 def test_empty_aug_specs_produces_no_output(tmp_image, output_dir, tmp_path, request):
-	"""Passing an empty aug_specs list produces no output."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "empty_specs"
+	"""Empty aug_specs list → no output."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "empty_specs")
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, [], mode=MODE_CALC, num=3)
 
-	actual = count_images(out_dir) if out_dir.exists() else 0
-	assert actual == 0
+	assert count_images(out_dir) == 0
 
 def test_all_empty_value_lists_produces_no_output(tmp_image, output_dir, tmp_path, request):
-	"""AugSpecs with all-empty value lists are filtered and produce no output."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "empty_values"
+	"""AugSpecs with empty value lists are filtered → no output."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "empty_values")
 	specs   = [
 		AugSpec(name="exp", func=change_exposure, values=[]),
-		AugSpec(name="con", func=contrast,         values=[]),
+		AugSpec(name="con", func=contrast,        values=[]),
 	]
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode=MODE_CALC, num=3)
 
-	actual = count_images(out_dir) if out_dir.exists() else 0
-	assert actual == 0
+	assert count_images(out_dir) == 0
 
 def test_unknown_mode_falls_back_to_all(tmp_image, output_dir, tmp_path, request):
-	"""An unrecognised mode string falls back to 'all' without raising."""
-	img_dir = _make_image_dir(tmp_path, tmp_image)
-	out_dir = output_dir / "unknown_mode"
-	specs   = _single_spec()
+	"""Unrecognised mode string falls back to 'all' without raising."""
+	img_dir = _img_dir(tmp_path, tmp_image)
+	out_dir = _out(tmp_path, output_dir, "unknown_mode")
+	specs   = _single_spec()	#	2 non-neutral combos
 
 	apply_augmentations_to_dir(img_dir, out_dir, None, None, specs, mode="banana")
 
-	#	Should have run as 'all': 2 non-neutral combos from values=[0.7, 1.3]
 	actual = count_images(out_dir)
 	assert actual == 2
