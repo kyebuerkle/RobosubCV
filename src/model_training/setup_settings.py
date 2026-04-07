@@ -7,43 +7,33 @@ import roboflow
 import json
 from pathlib import Path
 
-from general_lib import parse_float_list
+from general_lib import parse_float_list, parse_int_list
 from roboflow_datasets import Config, roboflow_login
 
 def _parse_args() -> dict:
 	"""
-	Parses the arguments. Returns dictionary of the arguments (use it to update to not re-write)
+	Parses the arguments. Returns dictionary of the arguments (use it to update without re-writing).
 
-	Arguments:
-	-exp/--exposure		comma seperated exposure list
-	-sat/--saturation	comma seperated saturation list
-	-res/--resize		comma seperated resize list
-	-o/--output			output results directory
-	-d/--dataset		dataset save directory
+	Primary augmentation arguments:
+	-exp/--exposure			comma separated exposure list
+	-con/--contrast			comma separated contrast list  (replaces saturation as primary)
+	-res/--resize			comma separated resize list
+	-mb/--motion-blur		comma separated motion blur list
+	-gb/--gaussian-blur		comma separated gaussian blur list
+	-hs/--hue-shift			comma separated hue shift list
+	-sat/--saturation		comma separated saturation list (legacy, kept for compat)
+
+	Other arguments:
+	-o/--output				output results directory
+	-d/--dataset			dataset save directory
+	--epochs / --patience / --device / --model
 	"""
 	parser = argparse.ArgumentParser(
 		description="Set up the configuration file for model training",
 		epilog="Use options to only change one portion of the configuration"
 		)
 	
-	parser.add_argument(
-		'-exp', "--exposure",
-		metavar="LIST",
-		type = parse_float_list,
-		help = "comma seperated list of exposure augmentations"
-		)
-	parser.add_argument(
-		'-sat', "--saturation",
-		metavar="LIST",
-		type = parse_float_list,
-		help = "comma seperated list of saturation augmentations"
-		)
-	parser.add_argument(
-		'-res', "--resize",
-		metavar="LIST",
-		type = parse_float_list,
-		help = "comma seperated list of resize augmentations"
-		)
+	# ── Dataset / paths ───────────────────────────────────────────────────────
 	parser.add_argument(
 		'-o', "--output",
 		metavar="DIR",
@@ -61,22 +51,109 @@ def _parse_args() -> dict:
 		action="store_true",
 		help = "prints the configuration.json file"
 		)
+
+	# ── Augmentation arguments ────────────────────────────────────────────────
+	parser.add_argument(
+		'-exp', "--exposure",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of exposure augmentations (e.g. 0.615,1,1.385)"
+		)
+	parser.add_argument(
+		'-con', "--contrast",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of contrast augmentations (e.g. 0.7,1,1.3)"
+		)
+	parser.add_argument(
+		'-res', "--resize",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of resize augmentations (e.g. 0.5,1,1.5)"
+		)
+	parser.add_argument(
+		'-mb', "--motion-blur",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of motion blur augmentations (e.g. 0.5,1,1.5)"
+		)
+	parser.add_argument(
+		'-gb', "--gaussian-blur",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of gaussian blur augmentations (e.g. 0.5,1,1.5)"
+		)
+	parser.add_argument(
+		'-hs', "--hue-shift",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "comma separated list of hue shift augmentations (e.g. 0.5,1,1.5)"
+		)
+	parser.add_argument(
+		'-sat', "--saturation",
+		metavar="LIST",
+		type = parse_float_list,
+		help = "(legacy) comma separated list of saturation augmentations"
+		)
+
+	# ── Training parameters ───────────────────────────────────────────────────
+	parser.add_argument(
+		"--epochs",
+		metavar="INT",
+		type=int,
+		help="epoch parameter for model training"
+		)
+	parser.add_argument(
+		"--patience",
+		metavar="INT",
+		type=int,
+		help="patience parameter for model training"
+		)
+	parser.add_argument(
+		"--device",
+		metavar="LIST",
+		type=parse_int_list,
+		help="device parameter for model creation"
+		)
+	parser.add_argument(
+		"--model",
+		metavar="YOLO MODEL",
+		type=str,
+		help="model parameter for model training, yolov8m.pt <- medium model, "
+		     "replace the m with n for nano, s for small, l for large, and x for extra large"
+		)
 	
 	args = parser.parse_args()
 	ret = {}
 	
-	if (args.exposure):
-		ret["exposure"] = args.exposure
-	if (args.saturation):
-		ret["saturation"] = args.saturation
-	if (args.resize):
-		ret["resize"] = args.resize
-	if (args.output):
+	if args.output:
 		ret["save"] = Path(args.output).resolve()
-	if (args.dataset):
+	if args.dataset:
 		ret["directory"] = Path(args.dataset).resolve()
-	if (args.print):
+	if args.print:
 		ret["print"] = args.print
+	if args.exposure:
+		ret["exposure"] = args.exposure
+	if args.contrast:
+		ret["contrast"] = args.contrast
+	if args.resize:
+		ret["resize"] = args.resize
+	if args.motion_blur:
+		ret["motion_blur"] = args.motion_blur
+	if args.gaussian_blur:
+		ret["gaussian_blur"] = args.gaussian_blur
+	if args.hue_shift:
+		ret["hue_shift"] = args.hue_shift
+	if args.saturation:
+		ret["saturation"] = args.saturation
+	if args.epochs:
+		ret["epochs"] = args.epochs
+	if args.patience:
+		ret["patience"] = args.patience
+	if args.device:
+		ret["device"] = args.device
+	if args.model:
+		ret["model"] = args.model
 	
 	if not ret:
 		return None
@@ -90,6 +167,31 @@ def _check_yes(answer: str) -> bool:
 		return True
 	else:
 		return False
+
+def _prompt_aug_list(label: str, default, default_label: str) -> list | None:
+	"""
+	Shared helper for the interactive augmentation prompts.
+
+	:param label:         Display name shown to the user (e.g. 'Exposure')
+	:param default:       The default list to use on empty input, or None for no default
+	:param default_label: Human-readable description of the default (e.g. '-37.5%, original, +38.5%')
+	:returns list | None: parsed list, or None if the user chose no augmentation
+	"""
+	values = input(f"\n    {label}: ")
+	if not values or values.strip() == "":
+		if default is not None:
+			print(f"Saving defaults: {default}, {default_label}")
+			return default
+		else:
+			print(f"No {label} augmentation")
+			return None
+	elif values.strip() == "0":
+		print(f"No {label} augmentation, equivalent to 1.0")
+		return None
+	else:
+		parsed = parse_float_list(values)
+		print(f"Saving values: {parsed}")
+		return parsed
 
 def alturnate_main(arg_dict):
 	"""
@@ -112,14 +214,17 @@ def main():
 	"""
 	Main script
 	
-	This script steps through seting up the config file and roboflow login
-	1. log into roboflow (choice of api or link)
+	This script steps through setting up the config file and roboflow login:
+	1. Log into roboflow (choice of API key or browser prompt)
 	2. Model results directory (optional)
 	3. Dataset save directory (optional)
-	4. Augmentation types (optional)
-		Saturation
-		Exposure
-		Resize
+	4. Augmentation types (interactive, in order):
+	     a. Exposure
+	     b. Contrast
+	     c. Resize
+	     d. Motion Blur
+	   (gaussian blur, hue shift, saturation available as arguments only)
+	5. Training parameters (epochs, patience, device, model)
 	"""
 	robosubcv_dir = Path(__file__).parent.parent.parent.absolute()
 
@@ -131,7 +236,7 @@ def main():
 	print("----------------------------------------------------------------------------------------------------------------")
 	print("")
 
-	#	Roboflow login
+	# ── 1. Roboflow login ─────────────────────────────────────────────────────
 	print("First you need to log into Roboflow in this terminal, you can either use an API key or login with Roboflow's url prompt.")
 	answer = input("Do you wish to use an API key (press enter or n for Roboflow prompt)? [y/n] ")
 
@@ -155,10 +260,10 @@ def main():
 		workspace = rf.workspace()
 		print(f"Default workspace: {workspace.name}")
 	except:
-		print(f"Couldn't find a default workspace with loggin")
+		print(f"Couldn't find a default workspace with login")
 	
-	#	Save Results
-	result_str = input("\nType in your prefered results directory for the YOLO output to go to (press Enter for default): ")
+	# ── 2. Results directory ──────────────────────────────────────────────────
+	result_str = input("\nType in your preferred results directory for the YOLO output to go to (press Enter for default): ")
 	result_path = Path(result_str)
 	if not result_str.strip():
 		result_path = robosubcv_dir / "results/"
@@ -177,8 +282,8 @@ def main():
 		sys.exit(1)
 	print(f"Saving models to {result_path}\n")
 
-	#	Save Directory
-	dir_str = input("Type in your prefered save directory for image training datasets (press Enter for default): ")
+	# ── 3. Dataset directory ──────────────────────────────────────────────────
+	dir_str = input("Type in your preferred save directory for image training datasets (press Enter for default): ")
 	dir_path = Path(dir_str)
 	if not dir_str.strip():
 		dir_path = robosubcv_dir / "data/"
@@ -195,56 +300,53 @@ def main():
 	if not dir_path.exists():
 		print(f"ERROR: failed to save dataset directory at: {dir_path}, exiting...")
 		sys.exit(1)
-	print(f"Saving datasts to {dir_path}\n")
+	print(f"Saving datasets to {dir_path}\n")
 
-	#	Augmentation
-	print("Finally, enter the amount of augmentation you want for each of the three types")
-	print("Press 'Enter' for default augmentation, Press '0' for no augmentation")
-	print("For each type make a list of comma seperated values (no spaces) of the % you want it augmented")
-	print("Example: 'Saturation: 0.5,1,1.5,2' will augment the dataset 4 times at 50%, 100% (no change to the image), 150%, and 200%")
+	# ── 4. Augmentation ───────────────────────────────────────────────────────
+	print("Now enter the augmentation values for each type.")
+	print("Press 'Enter' for the default values, press '0' for no augmentation.")
+	print("For each type, enter a comma-separated list of percentages (no spaces).")
+	print("Example: '0.7,1,1.3' applies augmentation at 70% (less), 100% (no change), and 130% (more).")
+	print("(gaussian blur, hue shift, and saturation are available as arguments: -gb, -hs, -sat)")
 
-	values = input("\n    Saturation: ")
-	if not values or values.strip() == "" or values == None:
-		saturation = [0.7, 1.0, 1.3]
-		print(f"Saving defaults: {saturation}, -30%, original, +30%")
-	elif values.strip() == "0":
-		saturation = None
-		print(f"No Saturation augmentation, equivilant to 1.0")
-	else:
-		saturation = parse_float_list(values)
-		print(f"Saving values: {saturation}")
+	#	a. Exposure
+	exposure = _prompt_aug_list(
+		"Exposure",
+		default=[0.615, 1.0, 1.385],
+		default_label="-38.5%, original, +38.5%  (±3 EV for RealSense camera)"
+		)
 
-	values = input("\n    Exposure: ")
-	if not values or values.strip() == "" or values == None:
-		exposure = [0.615, 1.0, 1.385]
-		print(f"Saving defaults: {exposure}, -37.5%, original, +38.5%. (This is ±3 EV for RealSense camera)")
-	elif values.strip() == "0":
-		exposure = None
-		print(f"No Exposure augmentation, equivilant to 1.0")
-	else:
-		exposure = parse_float_list(values)
-		print(f"Saving values: {exposure}")
+	#	b. Contrast  (primary photometric aug, replaces saturation in the interactive flow)
+	contrast = _prompt_aug_list(
+		"Contrast",
+		default=[0.7, 1.0, 1.3],
+		default_label="-30%, original, +30%"
+		)
 
-	values = input("\n    Resize: ")
-	if not values or values.strip() == "" or values == None:
-		resize = None
-		print(f"Saving defaults: {resize}, no default resize augmentation")
-	elif values.strip() == "0" or values.strip == "1" or values.strip == "1.0":
-		resize = None
-		print(f"No resize augmentation, equivilant to 1.0")
-	else:
-		resize = parse_float_list(values)
-		print(f"Saving values: {resize}")
+	#	c. Resize
+	resize = _prompt_aug_list(
+		"Resize",
+		default=None,
+		default_label="no default resize augmentation"
+		)
 
-	#	saving file
+	#	d. Motion Blur
+	motion_blur = _prompt_aug_list(
+		"Motion Blur",
+		default=None,
+		default_label="no default motion blur augmentation"
+		)
+
+	# ── 5. Saving ─────────────────────────────────────────────────────────────
 	print(f"\nSaving config file at {Config.path}")
 	config = Config(
-		api_key = api_key,
-		save_dir = result_path,
+		api_key     = api_key,
+		save_dir    = result_path,
 		dataset_dir = dir_path,
-		saturation = saturation,
-		exposure = exposure,
-		resize = resize
+		exposure    = exposure,
+		contrast    = contrast,
+		resize      = resize,
+		motion_blur = motion_blur,
 		)
 	config.save_file()
 	print("Finished setup, final file values: ")

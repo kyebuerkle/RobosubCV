@@ -6,6 +6,7 @@ from pathlib import Path
 from general_lib import loading, Animations
 import augmentation.config as config
 from augmentation import yolo_change_exposure, yolo_change_saturation, yolo_change_resize
+from augmentation import yolo_gaussian_blur, yolo_motion_blur, yolo_contrast, yolo_hue_shift
 from augmentation._shared_module import get_args
 
 def _do_yolo_augmentations(args, input_path, output_path):
@@ -43,6 +44,50 @@ def _do_yolo_augmentations(args, input_path, output_path):
 			)
 		input_path = output_path
 
+	if args.gaussian_blur:
+		if config.VERBOSE:
+			print(f"\nApplying gaussian blur augmentations: {args.gaussian_blur}")
+		yolo_gaussian_blur(
+			input_path,
+			output_path,
+			args.gaussian_blur,
+			"{file}_gblur{ind}{ext}"
+			)
+		input_path = output_path
+
+	if args.motion_blur:
+		if config.VERBOSE:
+			print(f"\nApplying motion blur augmentations: {args.motion_blur}")
+		yolo_motion_blur(
+			input_path,
+			output_path,
+			args.motion_blur,
+			"{file}_mblur{ind}{ext}"
+			)
+		input_path = output_path
+
+	if args.contrast:
+		if config.VERBOSE:
+			print(f"\nApplying contrast augmentations: {args.contrast}")
+		yolo_contrast(
+			input_path,
+			output_path,
+			args.contrast,
+			"{file}_con{ind}{ext}"
+			)
+		input_path = output_path
+
+	if args.hue_shift:
+		if config.VERBOSE:
+			print(f"\nApplying hue shift augmentations: {args.hue_shift}")
+		yolo_hue_shift(
+			input_path,
+			output_path,
+			args.hue_shift,
+			"{file}_hue{ind}{ext}"
+			)
+		input_path = output_path
+
 def main(args):
 	"""Main script"""
 	# Verify input directory exists
@@ -71,4 +116,3 @@ if __name__ == "__main__":
 	else:
 		with loading("Augmenting ", Animations.coen_fight):
 			main(args)
-		

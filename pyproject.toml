@@ -1,28 +1,25 @@
 [tool.poetry]
 name = "robosubcv"
-version = "1.0.0"
+version = "1.3.4"
 description = "Robosub Computer Vision repo for Capstone"
 authors = ["Kye Buerkle <22kyebue@gmail.com>"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "roboflow_datasets", from = "src"}]
+packages = [{include = "roboflow_datasets", from = "src"}, 
+            {include = "general_lib", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "^3.11"
 opencv-python = "^4.13.0.90"
 pandas = "^3.0.0"
 roboflow = "^1.2.13"
-ultralytics = "^8.4.8"
-torch = { version = "*", optional = true }
-torchvision = { version = "*", optional = true }
-torchaudio = { version = "*", optional = true }
 pytest = "^9.0.2"
 argparse = "^1.4.0"
+# this script needs ultralytics
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
 
 [tool.pytest.ini_options]
 testpaths = ["src"]

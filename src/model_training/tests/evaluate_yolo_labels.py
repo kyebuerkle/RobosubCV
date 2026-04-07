@@ -44,7 +44,12 @@ Usage
 
     # % area columns are computed automatically when data.yaml contains
     # an 'augmentations' block (written by dataset_config.py).
-    # Override with --config if you have a standalone configuration.json:
+    # For datasets augmented before that block existed, pass --resize directly:
+    python evaluate_yolo_labels.py -m model1.pt -d dataset/data.yaml \
+        --resize 0.25,1.0,1.5,2.0
+
+    # Override with --config if you have a standalone configuration.json
+    # (only useful if resize list is non-empty in that file):
     python evaluate_yolo_labels.py -m model1.pt -d dataset/data.yaml \
         --config configuration.json
 
@@ -66,6 +71,8 @@ import numpy as np
 import pandas as pd
 import yaml
 from ultralytics import YOLO
+import builtins as _builtins
+builtins_print = _builtins.print
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -114,6 +121,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default=None, metavar="PATH",
                    help="Path to configuration.json. Overrides the "
                         "'augmentations' block in data.yaml if both exist.")
+    p.add_argument("--resize", default=None, type=parse_float_list,
+                   metavar="LIST",
+                   help="Comma-separated resize values used during augmentation, "
+                        "e.g. 0.25,1.0,1.5,2.0. Overrides both data.yaml and "
+                        "--config for the resize list. Use this for datasets "
+                        "augmented before augmentation metadata was saved to "
+                        "data.yaml.")
 
     return p.parse_args()
 
@@ -339,7 +353,9 @@ def call_evaluate_yolo(args: argparse.Namespace) -> int:
     print("CMD:", " ".join(cmd))
     print()
 
-    result = subprocess.run(cmd)
+    sys.stdout.flush()
+    result = subprocess.run(cmd, stderr=None, stdout=None)
+    sys.stdout.flush()
     return result.returncode
 
 
@@ -819,9 +835,23 @@ def load_conf_map(summary_csv: Path) -> dict[tuple[str, str], float]:
 #  MAIN
 # ─────────────────────────────────────────────────────────────────
 
+def _print(*a, **kw):
+    """Print with immediate flush so sbatch/slurm captures output even on crash."""
+    kw.setdefault("flush", True)
+    builtins_print(*a, **kw)
+
+
 def main():
     args       = parse_args()
     output_dir = Path(args.output).resolve()
+
+    _print(f"[main] evaluate_yolo_labels.py starting")
+    _print(f"[main] models:  {args.models}")
+    _print(f"[main] data:    {args.data}")
+    _print(f"[main] splits:  {args.splits}")
+    _print(f"[main] output:  {output_dir}")
+    _print(f"[main] resize:  {getattr(args, 'resize', None)}")
+    _print(f"[main] device:  {args.device}")
 
     # ── Load augmentation config ──────────────────────────────────────────
     # Priority: --config (manual override) > augmentations block in data.yaml
@@ -830,10 +860,16 @@ def main():
     else:
         aug_cfg = load_augmentation_config_from_yaml(args.data)
 
+    # --resize flag overrides the resize list from any config source
+    if args.resize is not None:
+        aug_cfg["resize"] = args.resize
+        aug_cfg.pop("resize_baseline_index", None)   # force rescan since list changed
+        print(f"[config] --resize override applied: {args.resize}")
+
     if aug_cfg:
         resize_map = build_resize_index_map(aug_cfg)
-        # Use the pre-computed baseline index from data.yaml if available,
-        # otherwise fall back to scanning the list for value == 1.0.
+        # Use pre-computed baseline index from data.yaml if available,
+        # otherwise scan the list for value == 1.0.
         if "resize_baseline_index" in aug_cfg and aug_cfg["resize_baseline_index"] is not None:
             bl_idx = int(aug_cfg["resize_baseline_index"])
             print(f"[config] Resize map: {resize_map}")
@@ -842,6 +878,9 @@ def main():
             bl_idx = get_baseline_res_index(resize_map)
             print(f"[config] Resize map: {resize_map}")
             print(f"[config] Baseline res index (scanned): {bl_idx}")
+        if not resize_map:
+            print("[config] Resize list is empty — '% area' columns will be empty. "
+                  "Pass --resize 0.25,1.0,1.5,2.0 to enable.")
     else:
         print("[config] No augmentation config loaded — "
               "'% area' columns will be empty.")

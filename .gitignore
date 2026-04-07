@@ -8,6 +8,7 @@ results/*
 !**/pytest.ini
 sbatch/stream-out/*
 !sbatch/stream-out/README.md
+*.csv
 
 #	test images
 **/tests/*.png
@@ -16,7 +17,7 @@ sbatch/stream-out/*
 !**/tests/test_image.png
 !**/tests/test_image.jpg
 !**/tests/test_image.jpeg
-**/tests/output
+**/tests/output*
 **/tests/outputs
 **/tests/runs
 
@@ -50,3 +51,6 @@ sbatch/stream-out/*
 # Window Zone Identifiers
 *\:Zone.Identifier
 **\:Zone.Identifier
+
+# poetry
+poetry.lock

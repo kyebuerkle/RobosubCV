@@ -22,8 +22,9 @@ cd $HOME/RobosubCV/src/model_training/tests
 
 CONFIGFILE=$HOME/RobosubCV/src/configuration.json
 MODELS=(
+$HOME/RobosubCV/results/[MODEL]
 )
-DATASET=
+DATASET=$HOME/RobosubCV/data/[DATASET]/data.yaml
 SPLIT=(
 test
 train
@@ -34,9 +35,11 @@ val
 DEVICE=0,1
 
 poetry install
-poetry run python evaluate_yolo_labels.py --config $CONFIGFILE -m "${MODELS[@]}" -d $DATASET --device $DEVICE --split "${SPLIT[@]}"
 
+echo "Running evaluate_yolo_labels.py..."
+poetry run python evaluate_yolo_labels.py -m "${MODELS[@]}" -d $DATASET --device $DEVICE --splits "${SPLIT[@]}"
+
+echo "Summarizing yolo results..."
 poetry run python summarize_yolo_results.py -d ./output -o summarized_yolo_results.csv
 
 cd $HOME/RobosubCV/sbatch
-
