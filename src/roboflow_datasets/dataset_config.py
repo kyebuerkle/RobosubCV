@@ -7,7 +7,15 @@ import os
 import json
 
 from roboflow_datasets import roboflow_login
-from augmentation import yolo_change_exposure, yolo_change_saturation, yolo_change_resize
+from augmentation import (
+	yolo_change_exposure,
+	yolo_change_saturation,
+	yolo_change_resize,
+	yolo_contrast,
+	yolo_gaussian_blur,
+	yolo_motion_blur,
+	yolo_hue_shift,
+)
 
 class Config:
 	#	Roboflow config settings
@@ -22,9 +30,13 @@ class Config:
 	save_dir = ""
 
 	#	Augmentation settings
-	saturation = []
-	exposure = []
-	resize = []
+	saturation    = []		#	legacy — kept for backward-compat with old config files
+	exposure      = []
+	resize        = []
+	contrast      = []		#	replaces saturation as the primary photometric aug
+	gaussian_blur = []
+	motion_blur   = []
+	hue_shift     = []
 
 	#	model creation parameters
 	patience = 15
@@ -128,20 +140,24 @@ class Config:
 		Converts current Config to a dictionary		
 		"""
 		ret = {
-				"directory" : self.dataset_dir,
-				"dataset" : self.get_dataset(),
-				"workspace" : self.workspace,
-				"project" : self.project,
-				"version" : self.version,
-				"save" : self.save_dir,
-				"key" : self.api_key,
-				"saturation" : self.saturation,
-				"exposure" : self.exposure,
-				"resize" : self.resize,
-				"patience" : self.patience,
-				"epochs" : self.epochs,
-				"device" : self.device,
-				"model" : self.model
+				"directory"    : self.dataset_dir,
+				"dataset"      : self.get_dataset(),
+				"workspace"    : self.workspace,
+				"project"      : self.project,
+				"version"      : self.version,
+				"save"         : self.save_dir,
+				"key"          : self.api_key,
+				"saturation"   : self.saturation,		#	kept for backward-compat
+				"exposure"     : self.exposure,
+				"resize"       : self.resize,
+				"contrast"     : self.contrast,
+				"gaussian_blur": self.gaussian_blur,
+				"motion_blur"  : self.motion_blur,
+				"hue_shift"    : self.hue_shift,
+				"patience"     : self.patience,
+				"epochs"       : self.epochs,
+				"device"       : self.device,
+				"model"        : self.model,
 			}	
 		return ret
 	
@@ -165,8 +181,6 @@ class Config:
 		:returns False: when certain config (like workspace and project) don't exist
 		"""
 		for key, val in dict.items():
-			#if (key == "path" or key == "config_path"):
-			#	self.path = val
 			if (val is None or val == ""):
 				pass
 			elif (key == "workspace"):
@@ -189,6 +203,14 @@ class Config:
 				self.exposure = val
 			elif (key == "resize"):
 				self.resize = val
+			elif (key == "contrast"):
+				self.contrast = val
+			elif (key == "gaussian_blur"):
+				self.gaussian_blur = val
+			elif (key == "motion_blur"):
+				self.motion_blur = val
+			elif (key == "hue_shift"):
+				self.hue_shift = val
 			elif (key == "epochs"):
 				self.epochs = val
 			elif (key == "patience"):
@@ -271,35 +293,38 @@ class Config:
 		
 	def run_augmentations(self, **kwargs):
 		"""
-		Runs the augmentations in the Config, note adds 1 to the version for new dataset.
+		Runs the augmentations stored in Config against the downloaded dataset.
+		Bumps the version number so the augmented copy is saved separately.
 
-		After all augmentation passes complete, writes an 'augmentations' block into
-		the output dataset's data.yaml so that evaluation scripts can read the exact
-		augmentation parameters without needing a separate configuration.json.
+		Augmentation order:
+		  1. exposure       (photometric_module)
+		  2. contrast       (photometric_module_2, replaces saturation as primary)
+		  3. resize         (geometric_module)
+		  4. motion_blur    (photometric_module_2)
+		  5. gaussian_blur  (photometric_module_2)
+		  6. hue_shift      (photometric_module_2)
+		  7. saturation     (photometric_module, legacy — applied last if present)
 
-		:return dataset: dataset path to train, if no augmentations then it stays as get_dataset()
+		After all passes complete, writes an 'augmentations' block into the output
+		dataset's data.yaml so evaluation scripts can read the exact parameters.
+
+		:return dataset: path to the augmented dataset used for training
 		"""
-		if "saturation" in kwargs:
-			self.saturation = kwargs.get("saturation")
-		if "exposure" in kwargs:
-			self.exposure = kwargs.get("exposure")
-		if "resize" in kwargs:
-			self.resize = kwargs.get("resize")
+		#	allow callers to override per-run without touching the saved config
+		if "exposure"      in kwargs: self.exposure      = kwargs["exposure"]
+		if "contrast"      in kwargs: self.contrast      = kwargs["contrast"]
+		if "resize"        in kwargs: self.resize        = kwargs["resize"]
+		if "motion_blur"   in kwargs: self.motion_blur   = kwargs["motion_blur"]
+		if "gaussian_blur" in kwargs: self.gaussian_blur = kwargs["gaussian_blur"]
+		if "hue_shift"     in kwargs: self.hue_shift     = kwargs["hue_shift"]
+		if "saturation"    in kwargs: self.saturation    = kwargs["saturation"]
 
 		input_dataset = self.get_dataset()
 		self.version += 1
 		augmented_dataset = self.get_dataset()
 
-		# Track which augmentations were applied and in what order (for naming convention)
-		aug_order = []   # e.g. ["sat", "exp", "res"]
+		aug_order = []	#	tracks which augs ran, in order, for the yaml metadata
 
-		if isinstance(self.saturation, list) and self.saturation:
-			yolo_change_saturation(
-				input_dataset, augmented_dataset,
-				self.saturation, "{file}_sat{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("sat")
 		if isinstance(self.exposure, list) and self.exposure:
 			yolo_change_exposure(
 				input_dataset, augmented_dataset,
@@ -307,14 +332,55 @@ class Config:
 				)
 			input_dataset = augmented_dataset
 			aug_order.append("exp")
+
+		if isinstance(self.contrast, list) and self.contrast:
+			yolo_contrast(
+				input_dataset, augmented_dataset,
+				self.contrast, "{file}_con{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+			aug_order.append("con")
+
 		if isinstance(self.resize, list) and self.resize:
 			yolo_change_resize(
 				input_dataset, augmented_dataset,
 				self.resize, "{file}_res{ind}{ext}"
 				)
+			input_dataset = augmented_dataset
 			aug_order.append("res")
 
-		# ── Write augmentation metadata into the output data.yaml ────────────
+		if isinstance(self.motion_blur, list) and self.motion_blur:
+			yolo_motion_blur(
+				input_dataset, augmented_dataset,
+				self.motion_blur, "{file}_mblur{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+			aug_order.append("mblur")
+
+		if isinstance(self.gaussian_blur, list) and self.gaussian_blur:
+			yolo_gaussian_blur(
+				input_dataset, augmented_dataset,
+				self.gaussian_blur, "{file}_gblur{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+			aug_order.append("gblur")
+
+		if isinstance(self.hue_shift, list) and self.hue_shift:
+			yolo_hue_shift(
+				input_dataset, augmented_dataset,
+				self.hue_shift, "{file}_hue{ind}{ext}"
+				)
+			input_dataset = augmented_dataset
+			aug_order.append("hue")
+
+		#	Legacy saturation — applied last so old config files still work
+		if isinstance(self.saturation, list) and self.saturation:
+			yolo_change_saturation(
+				input_dataset, augmented_dataset,
+				self.saturation, "{file}_sat{ind}{ext}"
+				)
+			aug_order.append("sat")
+
 		self._save_augmentations_to_yaml(augmented_dataset, aug_order)
 
 		return input_dataset
@@ -325,15 +391,19 @@ class Config:
 
 		Schema written:
 		    augmentations:
-		      order: [sat, exp, res]          # token order in filenames, left to right
-		      naming_convention: "{file}_sat{ind}_exp{ind}_res{ind}{ext}"
-		      saturation: [0.7, 1.0, 1.3]
-		      exposure:   [0.615, 1.0, 1.385]
-		      resize:     [0.25, 1.0, 1.5, 2.0]
-		      resize_baseline_index: 1        # index of the 1.0 resize value
+		      order: [exp, con, res, mblur, gblur, hue, sat]
+		      naming_convention: "{file}_exp{ind}_con{ind}_res{ind}{ext}"
+		      exposure:       [0.615, 1.0, 1.385]
+		      contrast:       [0.7, 1.0, 1.3]
+		      resize:         [0.25, 1.0, 1.5, 2.0]
+		      motion_blur:    [0.5, 1.0, 1.5]
+		      gaussian_blur:  [0.5, 1.0, 1.5]
+		      hue_shift:      [0.5, 1.0, 1.5]
+		      saturation:     []   # legacy
+		      resize_baseline_index: 1
 
 		:param dataset_path: path to the augmented dataset root
-		:param aug_order: list of aug type strings in application order, e.g. ["sat","exp","res"]
+		:param aug_order: list of aug token strings in application order
 		"""
 		import yaml as _yaml
 
@@ -345,11 +415,19 @@ class Config:
 		with open(yaml_file, "r") as f:
 			data = _yaml.safe_load(f) or {}
 
-		# Build naming convention string from aug_order
-		tokens = {"sat": "_sat{ind}", "exp": "_exp{ind}", "res": "_res{ind}"}
+		#	Build naming convention string from the aug_order tokens
+		tokens = {
+			"exp"  : "_exp{ind}",
+			"con"  : "_con{ind}",
+			"res"  : "_res{ind}",
+			"mblur": "_mblur{ind}",
+			"gblur": "_gblur{ind}",
+			"hue"  : "_hue{ind}",
+			"sat"  : "_sat{ind}",
+		}
 		name_conv = "{file}" + "".join(tokens[a] for a in aug_order if a in tokens) + "{ext}"
 
-		# Find baseline resize index (first value == 1.0)
+		#	Find baseline resize index (first value == 1.0)
 		resize_baseline_index = None
 		if isinstance(self.resize, list):
 			for i, v in enumerate(self.resize):
@@ -358,11 +436,15 @@ class Config:
 					break
 
 		aug_block = {
-			"order":                 aug_order,
-			"naming_convention":     name_conv,
-			"saturation":            list(self.saturation) if isinstance(self.saturation, list) else [],
-			"exposure":              list(self.exposure)   if isinstance(self.exposure,   list) else [],
-			"resize":                list(self.resize)     if isinstance(self.resize,     list) else [],
+			"order"               : aug_order,
+			"naming_convention"   : name_conv,
+			"exposure"            : list(self.exposure)      if isinstance(self.exposure,      list) else [],
+			"contrast"            : list(self.contrast)      if isinstance(self.contrast,      list) else [],
+			"resize"              : list(self.resize)        if isinstance(self.resize,        list) else [],
+			"motion_blur"         : list(self.motion_blur)   if isinstance(self.motion_blur,   list) else [],
+			"gaussian_blur"       : list(self.gaussian_blur) if isinstance(self.gaussian_blur, list) else [],
+			"hue_shift"           : list(self.hue_shift)     if isinstance(self.hue_shift,     list) else [],
+			"saturation"          : list(self.saturation)    if isinstance(self.saturation,    list) else [],
 			"resize_baseline_index": resize_baseline_index,
 		}
 		data["augmentations"] = aug_block
@@ -371,7 +453,7 @@ class Config:
 			_yaml.dump(data, f, default_flow_style=False, sort_keys=False)
 
 		print(f"[augmentations] Metadata saved to {yaml_file}")
-		print(f"  order:              {aug_order}")
-		print(f"  naming_convention:  {name_conv}")
+		print(f"  order:             {aug_order}")
+		print(f"  naming_convention: {name_conv}")
 		if isinstance(self.resize, list) and self.resize:
-			print(f"  resize:             {self.resize}  (baseline index: {resize_baseline_index})")
+			print(f"  resize:            {self.resize}  (baseline index: {resize_baseline_index})")

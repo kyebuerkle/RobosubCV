@@ -48,33 +48,60 @@ def robo_arg_parse():
 
 	#	argument values
 	SAVE_DIRECTORY=../saving/here
-	SATURATINO=0.5,1
+	CONTRAST=0.7,1,1.3
 	EXPOSURE=2,1,0.5
+	MOTION_BLUR=0.5,1,1.5
 
 	poetry install
-	poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL -s $SAVE_DIRECTORY -sat $SATURATION -exp $EXPOSURE
+	poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL -s $SAVE_DIRECTORY -con $CONTRAST -exp $EXPOSURE -mb $MOTION_BLUR
 	'''
 		"""
 		)
 	
-	parser.add_argument('-u', "--url", help = "Input the URL of the roboflow project")
+	parser.add_argument('-u', "--url",       help = "Input the URL of the roboflow project")
 	parser.add_argument('-d', "--directory", help = "output directory")
 	parser.add_argument('-w', "--workspace", help = "roboflow workspace")
-	parser.add_argument('-p', "--project", help = "Project ID from rboflow")
-	parser.add_argument('-v', "--version", help = "versions of project, default 1", type=int)
-	parser.add_argument('-k', "--key", help = "api key for Roboflow login")
-	parser.add_argument('-f', "--format", help = "model format of images")
-	parser.add_argument('-y', "--yes", help = "accepts the overwrite without waiting for user input", action="store_true")
-	parser.add_argument('-s', "--save", help="save directory for the training model")
-	parser.add_argument('-sat', "--saturation", help="saturation augmentation values, comma seperated eg: 0.5,1,1.75")
-	parser.add_argument('-exp', "--exposure", help="exposure augmentation values, comma seperated eg: 0.5,1,1.75")
-	parser.add_argument('-res', "--resize", help="scale / resize augmentation values, comma seperated eg: 0.5,1,1.75,3")
-	parser.add_argument("--epochs", help="epoch paramter for model training")
-	parser.add_argument("--patience", help="patience paramter for model training")
-	parser.add_argument("--imgsz", help="imgsz parameter for model training")
-	parser.add_argument("--seed", help="seed paramter for model creation")
-	parser.add_argument("--device", help="device paramter for model creation")
-	parser.add_argument("--model", help="model paramter for model training, yolov8m.pt <- medium model, replace the m with n for nano, s for small, l for large, and x for extra large")
+	parser.add_argument('-p', "--project",   help = "Project ID from roboflow")
+	parser.add_argument('-v', "--version",   help = "versions of project, default 1", type=int)
+	parser.add_argument('-k', "--key",       help = "api key for Roboflow login")
+	parser.add_argument('-f', "--format",    help = "model format of images")
+	parser.add_argument('-y', "--yes",       help = "accepts the overwrite without waiting for user input", action="store_true")
+	parser.add_argument('-s', "--save",      help = "save directory for the training model")
+
+	#	── Augmentation arguments ──────────────────────────────────────────────
+	parser.add_argument('-exp', "--exposure",
+		help = "exposure augmentation values, comma separated eg: 0.5,1,1.75"
+		)
+	parser.add_argument('-con', "--contrast",
+		help = "contrast augmentation values, comma separated eg: 0.7,1,1.3"
+		)
+	parser.add_argument('-res', "--resize",
+		help = "scale / resize augmentation values, comma separated eg: 0.5,1,1.75,3"
+		)
+	parser.add_argument('-mb', "--motion_blur",
+		help = "motion blur augmentation values, comma separated eg: 0.5,1,1.5"
+		)
+	parser.add_argument('-gb', "--gaussian_blur",
+		help = "gaussian blur augmentation values, comma separated eg: 0.5,1,1.5"
+		)
+	parser.add_argument('-hs', "--hue_shift",
+		help = "hue shift augmentation values, comma separated eg: 0.5,1,1.5"
+		)
+	parser.add_argument('-sat', "--saturation",
+		help = "(legacy) saturation augmentation values, comma separated eg: 0.5,1,1.75"
+		)
+
+	#	── Training parameters ─────────────────────────────────────────────────
+	parser.add_argument("--epochs",   help = "epoch parameter for model training")
+	parser.add_argument("--patience", help = "patience parameter for model training")
+	parser.add_argument("--imgsz",    help = "imgsz parameter for model training")
+	parser.add_argument("--seed",     help = "seed parameter for model creation")
+	parser.add_argument("--device",   help = "device parameter for model creation")
+	parser.add_argument("--model",
+		help = "model parameter for model training, yolov8m.pt <- medium model, "
+		       "replace the m with n for nano, s for small, l for large, and x for extra large"
+		)
+
 	# TODO: parser.add_argument('-c', "--configuration", help = "configuration file", default = CONFIG_PATH)
 	args = parser.parse_args()
 	arg_dict = vars(args)
@@ -84,11 +111,12 @@ def robo_arg_parse():
 	if (not key_temp is None) and (key_temp == "[API_KEY]"):
 		arg_dict.pop("key")
 
-	#	parsing lists
-	for key in ["exposure", "saturation", "resize"]:
+	#	parsing float lists — all augmentation args
+	for key in ["exposure", "contrast", "resize", "motion_blur", "gaussian_blur", "hue_shift", "saturation"]:
 		if key in arg_dict:
 			val = arg_dict.get(key)
 			arg_dict[key] = list(parse_float_list(val))
+
 	if "device" in arg_dict:
 		val = arg_dict.get("device")
 		arg_dict["device"] = list(parse_int_list(val))
