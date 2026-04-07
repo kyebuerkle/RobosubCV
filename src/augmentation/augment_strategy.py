@@ -45,6 +45,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+import cv2
+import numpy as np
 import augmentation.config as config
 
 #	Supported image extensions (must match augment_dataset.py)
@@ -389,6 +391,85 @@ def _combo_filename(
 	return img_name, lbl_name
 
 
+def _apply_array(img: np.ndarray, spec: "AugSpec", val: float) -> np.ndarray:
+	"""
+	Apply a single photometric augmentation entirely in memory.
+
+	Avoids the imread/imwrite round-trip that the underlying module functions
+	use, which is the main source of slowness when stacking multiple augs.
+	Geometric specs (those with a label_func) are not handled here — they
+	still need a file path for the label transform and use a temp file.
+
+	All operations mirror the implementations in photometric_module.py and
+	photometric_module_2.py exactly so results are identical.
+	"""
+	if abs(val - 1.0) < 1e-9:
+		return img  # neutral — nothing to do
+
+	name = spec.name
+
+	if name == "exp" or name == "saturation":
+		#	change_exposure: multiply all channels and clip
+		if name == "saturation":
+			#	change_saturation: scale S channel in HSV
+			img_f = img.astype(np.float32) / 255.0
+			hsv = cv2.cvtColor(img_f, cv2.COLOR_BGR2HSV)
+			hsv[:, :, 1] = np.clip(hsv[:, :, 1] * val, 0.0, 1.0)
+			result = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+			return np.clip(result * 255.0, 0, 255).astype(np.uint8)
+		else:
+			return np.clip(img.astype(np.float32) * val, 0, 255).astype(np.uint8)
+
+	elif name == "con":
+		#	contrast: out = mean + (pixel - mean) * val
+		img_f = img.astype(np.float32)
+		mean  = img_f.mean(axis=(0, 1), keepdims=True)
+		return np.clip(mean + (img_f - mean) * val, 0, 255).astype(np.uint8)
+
+	elif name == "gblur":
+		#	gaussian_blur: sigma = 10 * val
+		sigma = 10.0 * val
+		if sigma <= 0:
+			return img
+		ksize = int(sigma * 6)
+		ksize = ksize if ksize % 2 == 1 else ksize + 1
+		ksize = max(1, ksize)
+		return cv2.GaussianBlur(img, (ksize, ksize), sigmaX=sigma, sigmaY=sigma)
+
+	elif name == "mblur":
+		#	motion_blur: streak length = 20 * val, default horizontal
+		length = int(round(20.0 * val))
+		if length <= 0:
+			return img
+		kernel = np.zeros((length, length), dtype=np.float32)
+		kernel[length // 2, :] = 1.0 / length
+		total = kernel.sum()
+		if total > 0:
+			kernel /= total
+		return cv2.filter2D(img, -1, kernel)
+
+	elif name == "hue":
+		#	hue_shift: shift H channel in uint8 HSV (0-179), 1 unit = 2 degrees
+		shift = int(round((val - 1.0) * 90.0))
+		if shift == 0:
+			return img
+		hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.int32)
+		hsv[:, :, 0] = (hsv[:, :, 0] + shift) % 180
+		return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+	else:
+		#	Unknown photometric aug — fall back to file-based path
+		import tempfile
+		tmp = Path(tempfile.mktemp(suffix=".png"))
+		try:
+			cv2.imwrite(str(tmp), img)
+			spec.func(str(tmp), str(tmp), val)
+			return cv2.imread(str(tmp))
+		finally:
+			if tmp.exists():
+				tmp.unlink()
+
+
 def _write_combo(
 	img_file:      Path,
 	img_out:       Path,
@@ -400,44 +481,60 @@ def _write_combo(
 	"""
 	Apply a combo of augmentation values to one image (and its label if present).
 
-	Each aug is applied in sequence on the same intermediate file, so the
-	augmentations stack (e.g. exposure then contrast then blur on one image).
-	A temporary file is used for intermediate steps.
+	Photometric augmentations are applied entirely in memory (read once, chain
+	array operations, write once) to avoid the imread/imwrite overhead of the
+	underlying module functions.  Geometric augmentations (those with a
+	label_func, i.e. resize) still use a single temp file because they also
+	need to transform the label file.
 	"""
-	#	Chain augmentations through a temp file
-	current_img = img_file
-	import tempfile, os
+	import tempfile
 
-	tmp_files = []
-	try:
-		for spec, val in zip(aug_specs, combo):
-			if abs(val - 1.0) < 1e-9 and spec.label_func is None:
-				#	Value is neutral AND not a geometric aug — skip writing a temp
-				continue
-			tmp = Path(tempfile.mktemp(suffix=img_file.suffix))
-			tmp_files.append(tmp)
-			spec.func(str(current_img), str(tmp), val)
-			current_img = tmp
+	#	Separate photometric from geometric specs for this combo
+	geo_spec = None
+	geo_val  = 1.0
+	for spec, val in zip(aug_specs, combo):
+		if spec.label_func is not None:
+			geo_spec = spec
+			geo_val  = val
+			break
 
-		#	Copy final result to destination
-		shutil.copy2(str(current_img), str(img_out))
+	#	If there is a non-neutral geometric aug, apply it via temp file first
+	#	so the label transform can also run, then read the result into memory.
+	geo_tmp = None
+	if geo_spec and abs(geo_val - 1.0) > 1e-9:
+		try:
+			geo_tmp = Path(tempfile.mktemp(suffix=img_file.suffix))
+			geo_spec.func(str(img_file), str(geo_tmp), geo_val)
+			img = cv2.imread(str(geo_tmp))
+		except Exception as e:
+			print(f"  [warn] geometric aug failed for {img_file.name}: {e}")
+			img = cv2.imread(str(img_file))
+	else:
+		img = cv2.imread(str(img_file))
 
-	finally:
-		for tmp in tmp_files:
-			if tmp.exists():
-				tmp.unlink()
+	if img is None:
+		print(f"  [warn] could not read {img_file}, skipping combo")
+		if geo_tmp and geo_tmp.exists():
+			geo_tmp.unlink()
+		return
+
+	#	Apply all photometric augmentations in memory
+	for spec, val in zip(aug_specs, combo):
+		if spec.label_func is not None:
+			continue  # already handled above
+		if abs(val - 1.0) < 1e-9:
+			continue  # neutral, skip
+		img = _apply_array(img, spec, val)
+
+	#	Write the final image once
+	cv2.imwrite(str(img_out), img)
+
+	#	Clean up geometric temp file
+	if geo_tmp and geo_tmp.exists():
+		geo_tmp.unlink()
 
 	#	Handle the label
 	if label_file and label_out:
-		#	Find the first geometric spec (one with a label_func) and its value
-		geo_spec  = None
-		geo_val   = 1.0
-		for spec, val in zip(aug_specs, combo):
-			if spec.label_func is not None:
-				geo_spec = spec
-				geo_val  = val
-				break
-
 		if geo_spec and abs(geo_val - 1.0) > 1e-9:
 			geo_spec.label_func(str(label_file), str(label_out), geo_val, str(img_file))
 		else:

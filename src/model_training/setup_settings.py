@@ -135,6 +135,24 @@ def _parse_args() -> dict:
 		help="model parameter for model training, yolov8m.pt <- medium model, "
 		     "replace the m with n for nano, s for small, l for large, and x for extra large"
 		)
+	parser.add_argument(
+		"--weight_decay",
+		metavar="FLOAT",
+		type=float,
+		help="model paramter for model training"
+		)
+	parser.add_argument(
+		"--dropout",
+		metavar="FLOAT",
+		type=float,
+		help="model paramter for training"
+	 	)
+	parser.add_argument(
+		"--mixup",
+		metavar="FLOAT",
+		type=float,
+		help="paramter for model training"
+	)
 	
 	args = parser.parse_args()
 	ret = {}
@@ -180,6 +198,12 @@ def _parse_args() -> dict:
 		ret["device"] = args.device
 	if args.model:
 		ret["model"] = args.model
+	if args.weight_decay:
+		ret["weight_decay"] = args.weight_decay
+	if args.dropout:
+		ret["dropout"] = args.dropout
+	if args.mixup:
+		ret["mixup"] = args.mixup
 	
 	if not ret:
 		return None

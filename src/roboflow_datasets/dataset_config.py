@@ -49,6 +49,9 @@ class Config:
 	epochs = 40
 	device = [0, 1]
 	model = "yolov8m.pt"
+	weight_decay = 0.005
+	dropout = 0.3
+	mixup = 0.2
 
 	"""--------Private------------"""
 	def __init__(self, args = None, **kwargs):
@@ -166,6 +169,9 @@ class Config:
 				"epochs"       : self.epochs,
 				"device"       : self.device,
 				"model"        : self.model,
+				"weight_decay" : self.weight_decay,
+				"dropout"	   : self.dropout,
+				"mixup"		   : self.mixup
 			}	
 		return ret
 	
@@ -231,6 +237,12 @@ class Config:
 				self.device = val
 			elif (key == "model"):
 				self.model = val
+			elif (key == "weight_decay"):
+				self.weight_decay = val
+			elif (key == "dropout"):
+				self.dropout = val
+			elif (key == "mixup"):
+				self.mixup = val
 
 		if (self.workspace is None) or (self.workspace == ""):
 			return False

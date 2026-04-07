@@ -54,6 +54,10 @@ def main(arg_dict, **kwargs):
 		seed 	= arg_dict.get("seed", 17),
 		device 	= config.device,
 		project = save_dir,
+		weight_decay = config.weight_decay,
+		dropout = config.dropout,
+		mosaic = arg_dict.get("mosaic", 1.0),
+		mixup = config.mixup
 		)
 	
 	return True

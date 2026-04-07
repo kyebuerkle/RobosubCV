@@ -10,7 +10,7 @@
 ## 1000G max for H100
 ## 500GB for Quad A100
 #SBATCH --mem=128G
-#SBATCH --time=0-04:00:00
+#SBATCH --time=0-12:00:00
 #SBATCH --job-name=RobosubCV
 ## %x is the job name and %j and the job number
 #SBATCH --output=./stream-out/%x-%j.out
