@@ -11,6 +11,11 @@ import shutil
 from .photometric_module import change_exposure, change_saturation
 from .photometric_module_2 import gaussian_blur, motion_blur, contrast, hue_shift
 from .geometric_module import change_scale, yolo_scale_label
+from .augment_strategy import (
+	AugSpec,
+	apply_augmentations_to_dir,
+	MODE_ALL, MODE_RANDOM, MODE_CALC,
+)
 import augmentation.config as config
 
 #	this is cool, its a function that you input another function as a parameter, it overrides it so that it loops through
@@ -716,3 +721,103 @@ def _yolo_hue_shift_function(
 		labels_in_dir, labels_out_dir,
 		value_list, name_conv
 		)
+
+
+#====================================================================================================
+#  Strategy-based augmentation  (all / random / calc)
+#====================================================================================================
+
+def yolo_augment(
+	input_dataset:  str,
+	output_dataset: str,
+	aug_config:     dict,
+	mode:           str = MODE_ALL,
+	num:            int = 1,
+):
+	"""
+	Apply augmentations to a full YOLOv8 dataset using a chosen strategy.
+
+	This is the single entry point used by dataset_config.run_augmentations()
+	when --augment is specified.  All aug types are combined into one pass per
+	image so augmentations can be stacked (e.g. exposure + contrast + blur on
+	the same output image), avoiding the multiplicative explosion of chaining
+	separate yolo_change_* calls.
+
+	:param input_dataset:  Path to the source YOLOv8 dataset (contains data.yaml)
+	:param output_dataset: Path for the augmented output dataset
+	:param aug_config:     Dict mapping aug-type names to value lists, e.g.:
+	                         {
+	                           'exposure':      [0.615, 1.0, 1.385],
+	                           'contrast':      [0.7, 1.0, 1.3],
+	                           'resize':        [0.5, 1.0, 1.5],
+	                           'motion_blur':   [1.0, 1.5],
+	                           'gaussian_blur': [1.0, 1.5],
+	                           'hue_shift':     [0.8, 1.2],
+	                           'saturation':    [0.7, 1.3],
+	                         }
+	                       Keys with empty lists or None are skipped.
+	:param mode:           'all' | 'random' | 'calc'
+	:param num:            Number of augmented images per original (random/calc only)
+	"""
+	#	Map aug-type name -> (photometric/geometric function, optional label function)
+	_AUG_FUNCS = {
+		'exposure'     : (change_exposure,  None),
+		'contrast'     : (contrast,         None),
+		'gaussian_blur': (gaussian_blur,     None),
+		'motion_blur'  : (motion_blur,       None),
+		'hue_shift'    : (hue_shift,         None),
+		'saturation'   : (change_saturation, None),
+		'resize'       : (change_scale,      yolo_scale_label),
+	}
+
+	#	Build AugSpec list from aug_config, preserving a sensible application order
+	_ORDER = ['exposure', 'contrast', 'resize', 'motion_blur', 'gaussian_blur', 'hue_shift', 'saturation']
+	aug_specs = []
+	for name in _ORDER:
+		vals = aug_config.get(name)
+		if not vals:
+			continue
+		func, label_func = _AUG_FUNCS[name]
+		aug_specs.append(AugSpec(name=name, func=func, values=list(vals), label_func=label_func))
+
+	if not aug_specs:
+		print("[yolo_augment] No active augmentation specs, nothing to do.")
+		return
+
+	_yolo_dataset_generic(
+		yaml_path    = input_dataset,
+		augment_func = _make_strategy_func(aug_specs, mode, num),
+		value_list   = [1.0],		#	value_list unused by strategy func, passed as dummy
+		name_conv    = "",
+		new_dataset  = output_dataset if output_dataset != input_dataset else None,
+	)
+
+
+def _make_strategy_func(
+	aug_specs: List[AugSpec],
+	mode:      str,
+	num:       int,
+) -> Callable:
+	"""
+	Returns a _yolo_*_function-compatible callable that uses apply_augmentations_to_dir.
+
+	The returned function has the same signature as the existing _yolo_*_function helpers:
+	  f(img_in_dir, img_out_dir, labels_in_dir, labels_out_dir, value_list, name_conv)
+	so it plugs straight into _yolo_dataset_generic.
+	"""
+	def _strategy_func(
+		img_in_dir, img_out_dir,
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv		#	value_list/name_conv ignored — strategy manages naming
+	):
+		apply_augmentations_to_dir(
+			images_dir     = img_in_dir,
+			images_out_dir = img_out_dir,
+			labels_dir     = labels_in_dir,
+			labels_out_dir = labels_out_dir,
+			aug_specs      = aug_specs,
+			mode           = mode,
+			num            = num,
+		)
+
+	return _strategy_func

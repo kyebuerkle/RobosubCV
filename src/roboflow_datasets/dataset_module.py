@@ -3,9 +3,6 @@
 #	brief: module for the dataset library
 #		This library manages all the Roboflow functionality
 #		Uploading and Downloading
-#	TODO: It is a little stupid to put all my vars in a dictionary
-#		I should make it into a Config class, that way it has functions
-#		relating to it (but I'll do this after designing the minimum model)
 
 import argparse
 import roboflow
@@ -90,6 +87,11 @@ def robo_arg_parse():
 	parser.add_argument('-sat', "--saturation",
 		help = "(legacy) saturation augmentation values, comma separated eg: 0.5,1,1.75"
 		)
+	parser.add_argument('--augment',
+		nargs='+',
+		metavar=('MODE', 'NUM'),
+		help = "Augmentation strategy: 'all', 'random 3', or 'calc 3'"
+		)
 
 	#	── Training parameters ─────────────────────────────────────────────────
 	parser.add_argument("--epochs",   help = "epoch parameter for model training")
@@ -120,5 +122,22 @@ def robo_arg_parse():
 	if "device" in arg_dict:
 		val = arg_dict.get("device")
 		arg_dict["device"] = list(parse_int_list(val))
+
+	#	Parse --augment MODE [NUM] into augment_mode / augment_num
+	if "augment" in arg_dict and arg_dict["augment"]:
+		raw  = arg_dict.pop("augment")
+		mode = raw[0].lower()
+		if mode not in ("all", "random", "calc"):
+			print(f"Warning: unknown --augment mode '{mode}', defaulting to 'all'")
+			mode = "all"
+		arg_dict["augment_mode"] = mode
+		if len(raw) >= 2:
+			try:
+				arg_dict["augment_num"] = int(raw[1])
+			except ValueError:
+				print(f"Warning: --augment NUM '{raw[1]}' is not an integer, defaulting to 3")
+				arg_dict["augment_num"] = 3
+	else:
+		arg_dict.pop("augment", None)
 
 	return arg_dict

@@ -15,7 +15,9 @@ from augmentation import (
 	yolo_gaussian_blur,
 	yolo_motion_blur,
 	yolo_hue_shift,
+	yolo_augment,
 )
+from augmentation.augment_strategy import MODE_ALL, MODE_RANDOM, MODE_CALC
 
 class Config:
 	#	Roboflow config settings
@@ -37,6 +39,10 @@ class Config:
 	gaussian_blur = []
 	motion_blur   = []
 	hue_shift     = []
+
+	#	Augmentation strategy
+	augment_mode  = MODE_ALL	#	'all' | 'random' | 'calc'
+	augment_num   = 3			#	images per original for random/calc modes
 
 	#	model creation parameters
 	patience = 15
@@ -154,6 +160,8 @@ class Config:
 				"gaussian_blur": self.gaussian_blur,
 				"motion_blur"  : self.motion_blur,
 				"hue_shift"    : self.hue_shift,
+				"augment_mode" : self.augment_mode,
+				"augment_num"  : self.augment_num,
 				"patience"     : self.patience,
 				"epochs"       : self.epochs,
 				"device"       : self.device,
@@ -211,6 +219,10 @@ class Config:
 				self.motion_blur = val
 			elif (key == "hue_shift"):
 				self.hue_shift = val
+			elif (key == "augment_mode"):
+				self.augment_mode = str(val)
+			elif (key == "augment_num"):
+				self.augment_num = int(val)
 			elif (key == "epochs"):
 				self.epochs = val
 			elif (key == "patience"):
@@ -296,14 +308,10 @@ class Config:
 		Runs the augmentations stored in Config against the downloaded dataset.
 		Bumps the version number so the augmented copy is saved separately.
 
-		Augmentation order:
-		  1. exposure       (photometric_module)
-		  2. contrast       (photometric_module_2, replaces saturation as primary)
-		  3. resize         (geometric_module)
-		  4. motion_blur    (photometric_module_2)
-		  5. gaussian_blur  (photometric_module_2)
-		  6. hue_shift      (photometric_module_2)
-		  7. saturation     (photometric_module, legacy — applied last if present)
+		Augmentation mode is controlled by self.augment_mode / self.augment_num:
+		  'all'        — one output per value per aug type (legacy, can oversample)
+		  'random NUM' — NUM randomly combined augmented images per original
+		  'calc NUM'   — NUM maximally-varied augmented images per original (deterministic)
 
 		After all passes complete, writes an 'augmentations' block into the output
 		dataset's data.yaml so evaluation scripts can read the exact parameters.
@@ -318,72 +326,44 @@ class Config:
 		if "gaussian_blur" in kwargs: self.gaussian_blur = kwargs["gaussian_blur"]
 		if "hue_shift"     in kwargs: self.hue_shift     = kwargs["hue_shift"]
 		if "saturation"    in kwargs: self.saturation    = kwargs["saturation"]
+		if "augment_mode"  in kwargs: self.augment_mode  = kwargs["augment_mode"]
+		if "augment_num"   in kwargs: self.augment_num   = kwargs["augment_num"]
 
 		input_dataset = self.get_dataset()
 		self.version += 1
 		augmented_dataset = self.get_dataset()
 
-		aug_order = []	#	tracks which augs ran, in order, for the yaml metadata
+		#	Collect all active aug configs into a single dict for yolo_augment
+		aug_config = {}
+		if isinstance(self.exposure,      list) and self.exposure:      aug_config['exposure']      = self.exposure
+		if isinstance(self.contrast,      list) and self.contrast:      aug_config['contrast']      = self.contrast
+		if isinstance(self.resize,        list) and self.resize:        aug_config['resize']        = self.resize
+		if isinstance(self.motion_blur,   list) and self.motion_blur:   aug_config['motion_blur']   = self.motion_blur
+		if isinstance(self.gaussian_blur, list) and self.gaussian_blur: aug_config['gaussian_blur'] = self.gaussian_blur
+		if isinstance(self.hue_shift,     list) and self.hue_shift:     aug_config['hue_shift']     = self.hue_shift
+		if isinstance(self.saturation,    list) and self.saturation:    aug_config['saturation']    = self.saturation
 
-		if isinstance(self.exposure, list) and self.exposure:
-			yolo_change_exposure(
-				input_dataset, augmented_dataset,
-				self.exposure, "{file}_exp{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("exp")
+		if not aug_config:
+			print("[Config] No augmentations configured, returning base dataset.")
+			return input_dataset
 
-		if isinstance(self.contrast, list) and self.contrast:
-			yolo_contrast(
-				input_dataset, augmented_dataset,
-				self.contrast, "{file}_con{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("con")
+		if config.VERBOSE:
+			print(f"[Config] Running augmentations — mode={self.augment_mode}  num={self.augment_num}")
+			for k, v in aug_config.items():
+				print(f"  {k}: {v}")
 
-		if isinstance(self.resize, list) and self.resize:
-			yolo_change_resize(
-				input_dataset, augmented_dataset,
-				self.resize, "{file}_res{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("res")
+		yolo_augment(
+			input_dataset  = input_dataset,
+			output_dataset = augmented_dataset,
+			aug_config     = aug_config,
+			mode           = self.augment_mode,
+			num            = self.augment_num,
+		)
 
-		if isinstance(self.motion_blur, list) and self.motion_blur:
-			yolo_motion_blur(
-				input_dataset, augmented_dataset,
-				self.motion_blur, "{file}_mblur{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("mblur")
-
-		if isinstance(self.gaussian_blur, list) and self.gaussian_blur:
-			yolo_gaussian_blur(
-				input_dataset, augmented_dataset,
-				self.gaussian_blur, "{file}_gblur{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("gblur")
-
-		if isinstance(self.hue_shift, list) and self.hue_shift:
-			yolo_hue_shift(
-				input_dataset, augmented_dataset,
-				self.hue_shift, "{file}_hue{ind}{ext}"
-				)
-			input_dataset = augmented_dataset
-			aug_order.append("hue")
-
-		#	Legacy saturation — applied last so old config files still work
-		if isinstance(self.saturation, list) and self.saturation:
-			yolo_change_saturation(
-				input_dataset, augmented_dataset,
-				self.saturation, "{file}_sat{ind}{ext}"
-				)
-			aug_order.append("sat")
-
+		aug_order = list(aug_config.keys())
 		self._save_augmentations_to_yaml(augmented_dataset, aug_order)
 
-		return input_dataset
+		return augmented_dataset
 
 	def _save_augmentations_to_yaml(self, dataset_path: str, aug_order: list):
 		"""

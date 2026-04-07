@@ -96,6 +96,19 @@ def _parse_args() -> dict:
 		help = "(legacy) comma separated list of saturation augmentations"
 		)
 
+	# ── Augmentation strategy ─────────────────────────────────────────────────
+	parser.add_argument(
+		'--augment',
+		nargs='+',
+		metavar=('MODE', 'NUM'),
+		help=(
+			'Augmentation strategy: '
+			'"all" (default, one image per value), '
+			'"random 3" (3 random combos per image), '
+			'"calc 3" (3 maximally-varied combos, deterministic)'
+		)
+		)
+
 	# ── Training parameters ───────────────────────────────────────────────────
 	parser.add_argument(
 		"--epochs",
@@ -146,6 +159,19 @@ def _parse_args() -> dict:
 		ret["hue_shift"] = args.hue_shift
 	if args.saturation:
 		ret["saturation"] = args.saturation
+	if args.augment:
+		raw = args.augment
+		mode = raw[0].lower()
+		if mode not in ("all", "random", "calc"):
+			print(f"Warning: unknown --augment mode '{mode}', defaulting to 'all'")
+			mode = "all"
+		ret["augment_mode"] = mode
+		if len(raw) >= 2:
+			try:
+				ret["augment_num"] = int(raw[1])
+			except ValueError:
+				print(f"Warning: --augment NUM '{raw[1]}' is not an integer, defaulting to 3")
+				ret["augment_num"] = 3
 	if args.epochs:
 		ret["epochs"] = args.epochs
 	if args.patience:
@@ -337,16 +363,50 @@ def main():
 		default_label="no default motion blur augmentation"
 		)
 
-	# ── 5. Saving ─────────────────────────────────────────────────────────────
+	# ── 5. Augmentation strategy ──────────────────────────────────────────────
+	print("\nHow should augmentations be applied to each image?")
+	print("  all        — one image per value per aug type (can oversample)")
+	print("  random N   — N randomly combined augmented images per original")
+	print("  calc N     — N maximally-varied augmented images per original (deterministic)")
+	print("Press Enter for default (calc 3).")
+
+	augment_mode = "calc"
+	augment_num  = 3
+	aug_answer = input("\n    Augment mode [all / random N / calc N]: ").strip().lower()
+	if aug_answer == "" or aug_answer == "calc":
+		augment_mode, augment_num = "calc", 3
+		print(f"Saving default: calc 3")
+	elif aug_answer == "all":
+		augment_mode = "all"
+		print(f"Saving: all")
+	else:
+		parts = aug_answer.split()
+		if parts[0] in ("random", "calc"):
+			augment_mode = parts[0]
+			if len(parts) >= 2:
+				try:
+					augment_num = int(parts[1])
+					print(f"Saving: {augment_mode} {augment_num}")
+				except ValueError:
+					print(f"Invalid number '{parts[1]}', defaulting to {augment_mode} 3")
+					augment_num = 3
+			else:
+				print(f"No number given, defaulting to {augment_mode} 3")
+		else:
+			print(f"Unrecognised input '{aug_answer}', defaulting to calc 3")
+
+	# ── 6. Saving ─────────────────────────────────────────────────────────────
 	print(f"\nSaving config file at {Config.path}")
 	config = Config(
-		api_key     = api_key,
-		save_dir    = result_path,
-		dataset_dir = dir_path,
-		exposure    = exposure,
-		contrast    = contrast,
-		resize      = resize,
-		motion_blur = motion_blur,
+		api_key      = api_key,
+		save_dir     = result_path,
+		dataset_dir  = dir_path,
+		exposure     = exposure,
+		contrast     = contrast,
+		resize       = resize,
+		motion_blur  = motion_blur,
+		augment_mode = augment_mode,
+		augment_num  = augment_num,
 		)
 	config.save_file()
 	print("Finished setup, final file values: ")
