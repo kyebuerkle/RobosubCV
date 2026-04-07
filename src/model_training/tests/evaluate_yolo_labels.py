@@ -158,14 +158,18 @@ def load_augmentation_config_from_yaml(data_yaml_path: str) -> dict:
     """
     Read the 'augmentations' block written by dataset_config.py into data.yaml.
 
-    Expected YAML block:
+    Expected YAML block (written by dataset_config._save_augmentations_to_yaml):
         augmentations:
-          order: [sat, exp, res]
-          naming_convention: "{file}_sat{ind}_exp{ind}_res{ind}{ext}"
-          saturation: [0.7, 1.0, 1.3]
-          exposure:   [0.615, 1.0, 1.385]
-          resize:     [0.25, 1.0, 1.5, 2.0]
-          resize_baseline_index: 1
+          order: [exp, con, res, mblur]
+          naming_convention: "{file}_exp{ind}_con{ind}_res{ind}_{idx}{ext}"
+          exposure:      [0.615, 1.0, 1.385]
+          contrast:      [0.7, 1.0, 1.3]
+          resize:        [0.25, 1.0, 1.5, 2.0]
+          motion_blur:   [1.0, 1.5]
+
+    NOTE: the new augment_strategy embeds float VALUES directly in filenames
+    (e.g. _res1.5) rather than integer indices, so resize_baseline_index
+    is no longer needed for % area calculation.
 
     Returns the augmentations sub-dict, or empty dict if not present.
     """
@@ -188,74 +192,84 @@ def load_augmentation_config_from_yaml(data_yaml_path: str) -> dict:
         return {}
 
 
-def build_resize_index_map(aug_cfg: dict) -> dict[int, float]:
-    """
-    Return {index: resize_value} from the 'resize' list in the config.
-    e.g. [0.25, 1.0, 1.75]  →  {0: 0.25, 1: 1.0, 2: 1.75}
-    """
-    resize_list = aug_cfg.get("resize", [])
-    return {i: float(v) for i, v in enumerate(resize_list)}
-
-
-def get_baseline_res_index(resize_map: dict[int, float]) -> int | None:
-    """
-    Return the first index whose resize value == 1.0, or None if absent.
-    """
-    for idx, val in resize_map.items():
-        if abs(val - 1.0) < 1e-9:
-            return idx
-    return None
+# build_resize_index_map / get_baseline_res_index are no longer needed.
+# The new augment_strategy embeds resize VALUES directly in filenames
+# (e.g. _res1.5) so the scale is read straight from the stem — no index
+# map or baseline-index lookup required.
 
 
 # ─────────────────────────────────────────────────────────────────
 #  FILENAME AUGMENTATION PARSING
 # ─────────────────────────────────────────────────────────────────
+#
+#  augment_strategy.py produces filenames in the format:
+#
+#    {original_stem}_{name0}{val0}_{name1}{val1}_..._{combo_idx}[_r{repeat}]{ext}
+#
+#  e.g.  img001_exp0.615_con0.7_res1.5_0.jpg
+#        widths_png_exp0.7_con0.8_2_r1.jpg   (wrapped repeat)
+#        widths_png.jpg                       (original copy, no tokens)
+#
+#  Key differences from the old index-based format (_sat0_exp1_res2):
+#    - float values embedded directly, not integer indices
+#    - a single trailing combo index, not one index per aug type
+#    - the original copy has NO augmentation tokens at all
+#
+#  The baseline for % area is always the ORIGINAL image (the copy that
+#  augment_strategy writes alongside the augmented images), whose label
+#  file is simply {original_stem}.txt.
+#
+#  The resize scale is read directly from the _res token value — no
+#  index → value mapping needed.
 
-# Matches trailing augmentation tokens: _sat3, _exp1, _res2, etc.
-_AUG_TOKEN_RE = re.compile(r'_(sat|exp|res)(\d+)$', re.IGNORECASE)
+# Known augmentation token names (from augment_strategy._AUG_FUNCS)
+_KNOWN_AUG_NAMES = {"exp", "con", "res", "mblur", "gblur", "hue", "sat"}
+
+# Matches a single augmentation token: _name{float_or_int}
+_AUG_VALUE_RE = re.compile(
+    r'_(%s)([\.\d]+)' % '|'.join(sorted(_KNOWN_AUG_NAMES, key=len, reverse=True))
+)
+# Trailing combo index:  _N  or  _N_rM
+_COMBO_INDEX_RE = re.compile(r'_(\d+)(?:_r(\d+))?$')
 
 
-def split_aug_suffix(stem: str) -> tuple[str, dict[str, int]]:
+def parse_strategy_stem(stem: str) -> tuple[str, dict[str, float]]:
     """
-    Strip trailing augmentation tokens from a file stem and return
-    (base_stem, {aug_type: index}).
+    Parse a stem produced by augment_strategy._combo_filename and return
+    (original_stem, {aug_name: float_value}).
 
-    Example:
-        "img.png.rf.a1234_sat0_exp1_res2"
-        → ("img.png.rf.a1234", {"sat": 0, "exp": 1, "res": 2})
+    original_stem is the source image stem BEFORE any augmentation tokens —
+    this matches the filename of the original copy in the output directory,
+    and therefore the basename of the GT label file for that image.
 
-    Tokens are stripped from right to left; parsing stops when no
-    augmentation token is found.
+    Examples
+    --------
+    "img001_exp0.615_con0.7_res1.5_0"
+        → ("img001", {"exp": 0.615, "con": 0.7, "res": 1.5})
+
+    "widths_png_exp0.7_con0.8_2_r1"
+        → ("widths_png", {"exp": 0.7, "con": 0.8})
+
+    "widths_png"   (original copy — no aug tokens)
+        → ("widths_png", {})
     """
-    augs: dict[str, int] = {}
     s = stem
-    while True:
-        m = _AUG_TOKEN_RE.search(s)
-        if not m:
-            break
-        aug_type  = m.group(1).lower()
-        aug_index = int(m.group(2))
-        augs[aug_type] = aug_index
-        s = s[:m.start()]   # remove the matched token
-    return s, augs
 
+    # Strip trailing combo index (and optional _r{repeat})
+    m = _COMBO_INDEX_RE.search(s)
+    if m:
+        s = s[:m.start()]
 
-def make_baseline_stem(base: str, augs: dict[str, int],
-                        baseline_res_idx: int) -> str:
-    """
-    Re-assemble a file stem with the res index replaced by baseline_res_idx,
-    preserving the original order of augmentation tokens.
+    # Collect all augmentation tokens
+    augs: dict[str, float] = {}
+    for m in _AUG_VALUE_RE.finditer(s):
+        augs[m.group(1)] = float(m.group(2))
 
-    Token ordering is inferred from the original augs dict.  Because Python
-    3.7+ dicts are insertion-ordered and we strip tokens right-to-left, we
-    reverse to get original left-to-right order.
-    """
-    ordered_types = list(reversed(list(augs.keys())))
-    parts = [base]
-    for aug_type in ordered_types:
-        idx = baseline_res_idx if aug_type == "res" else augs[aug_type]
-        parts.append(f"_{aug_type}{idx}")
-    return "".join(parts)
+    # original_stem = everything before the first aug token
+    first = _AUG_VALUE_RE.search(s)
+    original_stem = s[:first.start()] if first else s
+
+    return original_stem, augs
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -546,31 +560,38 @@ def box_iou_single(cx1, cy1, w1, h1, cx2, cy2, w2, h2) -> float:
 
 class AreaCache:
     """
-    Pre-indexes all GT label files in a label directory so we can quickly
-    look up the baseline (res=1.0) labels for any augmented image stem.
+    Looks up the original (pre-augmentation) GT label for any augmented image
+    stem and computes what fraction of each GT box remained in frame after the
+    resize crop.
+
+    How it works with the new augment_strategy filename format
+    ----------------------------------------------------------
+    augment_strategy always copies the ORIGINAL image into the output
+    directory alongside the augmented images.  Its filename is the unchanged
+    source stem (e.g. widths_png.jpg), and its GT label file is therefore
+    {original_stem}.txt in the GT labels directory.
+
+    For augmented images the stem encodes aug VALUES directly
+    (e.g. widths_png_exp0.7_res1.5_0).  parse_strategy_stem() strips the
+    aug tokens and combo index to recover the original_stem, and reads the
+    resize scale directly from the _res token — no index→value map needed.
 
     Usage
     -----
-        cache = AreaCache(gt_label_dir, resize_map, baseline_res_idx)
-        pct   = cache.get_percent_area(stem, cls_id, cx, cy, w, h,
-                                       is_gt=False)
+        cache = AreaCache(gt_label_dir)
+        pct   = cache.get_percent_area(stem, cls_id, cx, cy, w, h)
     """
 
-    def __init__(self, gt_label_dir: Path,
-                 resize_map: dict[int, float],
-                 baseline_res_idx: int | None):
-        self.gt_label_dir    = gt_label_dir
-        self.resize_map      = resize_map
-        self.baseline_res_idx = baseline_res_idx
-        # {baseline_stem: np.ndarray of GT labels}
+    def __init__(self, gt_label_dir: Path):
+        self.gt_label_dir = gt_label_dir
+        # {original_stem: np.ndarray of GT labels from the original image}
         self._baseline_cache: dict[str, np.ndarray] = {}
-        self._available      = baseline_res_idx is not None and bool(resize_map)
 
-    def _load_baseline(self, baseline_stem: str) -> np.ndarray:
-        if baseline_stem not in self._baseline_cache:
-            txt = self.gt_label_dir / f"{baseline_stem}.txt"
-            self._baseline_cache[baseline_stem] = read_yolo_labels(txt)
-        return self._baseline_cache[baseline_stem]
+    def _load_baseline(self, original_stem: str) -> np.ndarray:
+        if original_stem not in self._baseline_cache:
+            txt = self.gt_label_dir / f"{original_stem}.txt"
+            self._baseline_cache[original_stem] = read_yolo_labels(txt)
+        return self._baseline_cache[original_stem]
 
     def get_percent_area(
         self,
@@ -579,49 +600,51 @@ class AreaCache:
         cx_n: float, cy_n: float, w_n: float, h_n: float,
     ) -> float | None:
         """
-        Compute % area for a single box.
+        Compute the fraction of a GT box that remained visible after an
+        upscale-and-crop augmentation.
 
-        Returns None if:
-          - no config was provided
-          - the stem has no 'res' augmentation token
-          - the resize value for this index is <= 1.0 (no upscaling)
-          - no matching baseline label exists for the same class
-        Returns 100.0 if the label was not cropped at all.
+        Returns
+        -------
+        float   : fraction in [0, 1] expressed as a percentage (×100) —
+                  1.0 means the full box was in frame, 0.5 means half was
+                  cropped away.
+        100.0   : if the image had no resize augmentation, or resize ≤ 1.0
+                  (downscale does not crop, it pads/letterboxes).
+        None    : if the original GT label cannot be found, or the class
+                  has no matching box in the original.
+
+        Algorithm
+        ---------
+        1. parse_strategy_stem() → original_stem + {aug_name: value}
+        2. If no 'res' token → 100.0  (not resize-augmented)
+        3. If resize_scale ≤ 1.0 → 100.0  (downscale, no cropping)
+        4. Load {original_stem}.txt — the GT labels for the source image
+        5. Find the best-matching box of the same class by IoU
+        6. compute_percent_area(baseline_box, resize_scale)
         """
-        if not self._available:
-            return None
-
-        base, augs = split_aug_suffix(stem)
+        original_stem, augs = parse_strategy_stem(stem)
 
         if "res" not in augs:
-            # Image was not resize-augmented; area is effectively 100 %
+            # Original copy or no resize aug applied — nothing was cropped
             return 100.0
 
-        res_idx      = augs["res"]
-        resize_scale = self.resize_map.get(res_idx)
+        resize_scale = augs["res"]
 
-        if resize_scale is None:
-            print(f"  [warn] res index {res_idx} not in resize map for stem '{stem}'")
-            return None
-
-        # No upscaling → nothing could have been cropped
+        # Downscale pads/letterboxes, never crops
         if resize_scale <= 1.0:
             return 100.0
 
-        # Build the baseline stem (same sat/exp, but res = baseline_res_idx)
-        baseline_stem   = make_baseline_stem(base, augs, self.baseline_res_idx)
-        baseline_labels = self._load_baseline(baseline_stem)
-
+        baseline_labels = self._load_baseline(original_stem)
         if baseline_labels.shape[0] == 0:
-            return None   # no baseline label file
+            return None   # original label file not found
 
-        # Find best-matching baseline box of the same class
         same_cls = baseline_labels[baseline_labels[:, 0].astype(int) == cls_id]
         if same_cls.shape[0] == 0:
-            return None   # class not present in baseline
+            return None   # class not in original labels
 
-        best_iou   = -1.0
-        best_row   = None
+        # Match to the baseline box with highest IoU
+        best_iou = -1.0
+        best_row = None
         for row in same_cls:
             iou = box_iou_single(cx_n, cy_n, w_n, h_n,
                                  row[1], row[2], row[3], row[4])
@@ -632,11 +655,10 @@ class AreaCache:
         if best_row is None:
             return None
 
-        pct = compute_percent_area(
+        return compute_percent_area(
             best_row[1], best_row[2], best_row[3], best_row[4],
             resize_scale,
         )
-        return pct
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -652,12 +674,8 @@ def build_label_csv(args: argparse.Namespace,
     Walk every model × split, read predicted and GT label files,
     match predictions to GT boxes, and write per_label_results.csv.
     """
-    resize_map        = build_resize_index_map(aug_cfg)
-    baseline_res_idx  = get_baseline_res_index(resize_map)
-
-    if aug_cfg and baseline_res_idx is None:
-        print("[warn] No resize=1.0 entry found in config — "
-              "'% area' columns will be empty.")
+    # resize_map / baseline_res_idx no longer needed — the new AreaCache reads
+    # the resize scale directly from the filename token (_res{value}).
 
     class_names_cache: dict[str, dict] = {}
     rows = []
@@ -700,8 +718,8 @@ def build_label_csv(args: argparse.Namespace,
             if not gt_label_dir.exists():
                 print(f"  [warn] GT labels dir not found: {gt_label_dir}")
 
-            # ── Build area cache (uses GT label dir for baselines) ─────────
-            area_cache = AreaCache(gt_label_dir, resize_map, baseline_res_idx)
+            # ── Build area cache (uses original GT labels from base stems) ───
+            area_cache = AreaCache(gt_label_dir)
 
             # ── Collect image paths ────────────────────────────────────────
             img_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
@@ -867,23 +885,16 @@ def main():
         print(f"[config] --resize override applied: {args.resize}")
 
     if aug_cfg:
-        resize_map = build_resize_index_map(aug_cfg)
-        # Use pre-computed baseline index from data.yaml if available,
-        # otherwise scan the list for value == 1.0.
-        if "resize_baseline_index" in aug_cfg and aug_cfg["resize_baseline_index"] is not None:
-            bl_idx = int(aug_cfg["resize_baseline_index"])
-            print(f"[config] Resize map: {resize_map}")
-            print(f"[config] Baseline res index (from yaml): {bl_idx}")
+        resize_list = aug_cfg.get("resize", [])
+        if resize_list:
+            print(f"[config] Resize values in dataset: {resize_list}")
+            print("[config] % area will be computed from _res{{value}} filename tokens.")
         else:
-            bl_idx = get_baseline_res_index(resize_map)
-            print(f"[config] Resize map: {resize_map}")
-            print(f"[config] Baseline res index (scanned): {bl_idx}")
-        if not resize_map:
-            print("[config] Resize list is empty — '% area' columns will be empty. "
-                  "Pass --resize 0.25,1.0,1.5,2.0 to enable.")
+            print("[config] No resize augmentation in dataset — "
+                  "'% area' columns will default to 100.0.")
     else:
         print("[config] No augmentation config loaded — "
-              "'% area' columns will be empty.")
+              "'% area' columns will default to 100.0 for non-resize images.")
 
     # ── Step 1: run evaluate_yolo.py ──────────────────────────────────────
     rc = call_evaluate_yolo(args)
