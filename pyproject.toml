@@ -1,12 +1,13 @@
 [tool.poetry]
 name = "robosubcv"
-version = "1.3.4"
+version = "2.2.7"
 description = "Robosub Computer Vision repo for Capstone"
 authors = ["Kye Buerkle <22kyebue@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 packages = [{include = "roboflow_datasets", from = "src"}, 
-            {include = "general_lib", from = "src"}]
+            {include = "general_lib", from = "src"},
+            {include = "augmentation", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"

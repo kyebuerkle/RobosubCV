@@ -21,6 +21,7 @@ from augmentation.augment_strategy import MODE_ALL, MODE_RANDOM, MODE_CALC
 
 class Config:
 	#	Roboflow config settings
+	use_roboflow = True
 	path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../configuration.json"))
 	workspace  = ""
 	project = ""
@@ -106,6 +107,7 @@ class Config:
 			return False
 		self.workspace = temp_space[-3]
 		self.project = temp_space[-2]
+		self.use_roboflow = True
 		
 		return True
 
@@ -117,9 +119,12 @@ class Config:
 
 		:returns str: The path to the dataset
 		"""
-		if not self.project or self.project == "":
-			return ""
-		return os.path.abspath(os.path.join(self.dataset_dir, f"{self.project}-v{self.version}"))
+		if self.use_roboflow:
+			if not self.project or self.project == "":
+				return ""
+			return os.path.abspath(os.path.join(self.dataset_dir, f"{self.project}-v{self.version}"))
+		else:
+			return os.path.abspath(self.dataset_dir)
 	
 	def get_yaml(self):
 		"""
@@ -149,6 +154,7 @@ class Config:
 		Converts current Config to a dictionary		
 		"""
 		ret = {
+				"use_roboflow" : self.use_roboflow,
 				"directory"    : self.dataset_dir,
 				"dataset"      : self.get_dataset(),
 				"workspace"    : self.workspace,
@@ -197,6 +203,8 @@ class Config:
 		for key, val in dict.items():
 			if (val is None or val == ""):
 				pass
+			elif (key == "use_roboflow"):
+				self.use_roboflow = bool(val)
 			elif (key == "workspace"):
 				self.workspace = str(val)
 			elif (key == "project"):
@@ -259,7 +267,7 @@ class Config:
 
 		return True
 	
-	def roboflow_download(self, format = "coco", yes = False):
+	def roboflow_download(self, format = "yolov8", yes = False):
 		"""
 		downloads roboflow dataset
 		
@@ -267,6 +275,9 @@ class Config:
 		:param yes: bool, true to delete dataset to replace, false to ask for user input
 		:returns dataset: the roboflow dataset object
 		"""
+		if (not self.use_roboflow):
+			return os.path.exists(self.get_dataset())
+
 		if os.path.exists(self.get_dataset()):
 			print("Dataset already exists, Do you wish to overwrite?")
 			if yes:
