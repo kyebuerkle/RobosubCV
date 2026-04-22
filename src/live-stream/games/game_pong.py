@@ -375,10 +375,10 @@ class Game(GamePlugin):
             self._state_ts = now
             return
 
-        # Draw waiting overlay
+        # Draw waiting overlay — semi-transparent dark tint only
         overlay = frame.copy()
         cv2.rectangle(overlay, (0, 0), (fw, fh), (20, 15, 40), -1)
-        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
 
         title = "HAND  PONG"
         (tw, th), _ = cv2.getTextSize(title, FONT, 1.8, 3)
@@ -502,7 +502,7 @@ class Game(GamePlugin):
 
         ov = frame.copy()
         cv2.rectangle(ov, (0, 0), (fw, fh), (10, 8, 25), -1)
-        cv2.addWeighted(ov, 0.65, frame, 0.35, 0, frame)
+        cv2.addWeighted(ov, 0.40, frame, 0.60, 0, frame)
 
         t = math.sin(now * 5) * 0.5 + 0.5
         pulse = tuple(int(c * (0.7 + 0.3 * t)) for c in col)
@@ -579,19 +579,16 @@ class Game(GamePlugin):
     def _draw_court(self, frame: np.ndarray):
         fw, fh = self._fw, self._fh
 
-        # Background
-        cv2.rectangle(frame, (0, 0), (fw, fh), C_BG, -1)
-
-        # Goal zones (subtle tinted strips)
+        # Goal zones — semi-transparent tinted strips over live video
         goal_w = PADDLE_MARGIN
         ov = frame.copy()
         cv2.rectangle(ov, (0, 0), (goal_w, fh), C_P1, -1)
         cv2.rectangle(ov, (fw - goal_w, 0), (fw, fh), C_P2, -1)
-        cv2.addWeighted(ov, 0.12, frame, 0.88, 0, frame)
+        cv2.addWeighted(ov, 0.30, frame, 0.70, 0, frame)
 
         # Goal lines
-        cv2.line(frame, (goal_w, 0), (goal_w, fh), C_P1, 1, cv2.LINE_AA)
-        cv2.line(frame, (fw - goal_w, 0), (fw - goal_w, fh), C_P2, 1, cv2.LINE_AA)
+        cv2.line(frame, (goal_w, 0), (goal_w, fh), C_P1, 2, cv2.LINE_AA)
+        cv2.line(frame, (fw - goal_w, 0), (fw - goal_w, fh), C_P2, 2, cv2.LINE_AA)
 
         # Centre dashed line
         dash = 18;  gap = 10
@@ -600,7 +597,7 @@ class Game(GamePlugin):
             cv2.line(frame, (fw // 2, y), (fw // 2, min(y + dash, fh)), C_NET, 1, cv2.LINE_AA)
             y += dash + gap
 
-        # Top / bottom border
+        # Top / bottom border lines only (no fill)
         cv2.line(frame, (0, 0),      (fw, 0),      C_COURT, 2)
         cv2.line(frame, (0, fh - 1), (fw, fh - 1), C_COURT, 2)
 
