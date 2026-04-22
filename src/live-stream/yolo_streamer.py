@@ -205,10 +205,10 @@ class YoloStreamApp(tk.Tk):
 
         # ── Tracking settings ──
         self.tracking_enabled    = tk.BooleanVar(value=True)
-        self.iou_threshold_var   = tk.DoubleVar(value=0.30)
-        self.max_lost_frames_var = tk.IntVar(value=15)
-        self.smooth_alpha_var    = tk.DoubleVar(value=0.40)
-        self.label_smooth_var    = tk.IntVar(value=5)
+        self.iou_threshold_var   = tk.DoubleVar(value=0.25)
+        self.max_lost_frames_var = tk.IntVar(value=5)
+        self.smooth_alpha_var    = tk.DoubleVar(value=0.75)
+        self.label_smooth_var    = tk.IntVar(value=10)
 
         # ── Pose settings ──
         self.pose_styles   = PoseStyles()
@@ -370,13 +370,14 @@ class YoloStreamApp(tk.Tk):
         self.cam_combo.pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(cam_row, text="↻", width=3,
                    command=self._refresh_cameras).pack(side=tk.LEFT, padx=(4, 0))
+        
+        ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
+                        variable=self.mirror_var).pack(anchor="w")
 
         section(ctrl, "Resolution")
         hint(ctrl, "Lower res = faster capture + less resize work")
         res_row = ttk.Frame(ctrl)
         res_row.pack(fill=tk.X)
-        ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
-                        variable=self.mirror_var).pack(anchor="w")
         for res in ("320x240", "640x480", "1280x720"):
             ttk.Radiobutton(res_row, text=res, variable=self.cam_res_var,
                             value=res).pack(side=tk.LEFT, padx=2)
@@ -601,6 +602,8 @@ class YoloStreamApp(tk.Tk):
         ttk.Button(game_btn_row, text="Unload",
                    command=self._unload_game).pack(side=tk.LEFT, padx=(4, 0))
 
+        ttk.Button(ctrl, text="Toggle XY mode  [X]",
+                   command=self._game_key).pack(fill=tk.X, pady=(0, 2))
         self._game_status_var = tk.StringVar(value="No game loaded.")
         tk.Label(ctrl, textvariable=self._game_status_var, bg=PANEL_BG,
                  fg="#cba6f7", font=("Segoe UI", 8), wraplength=230,
@@ -686,6 +689,9 @@ class YoloStreamApp(tk.Tk):
             short = path.split("/")[-1].split("\\")[-1]
             self._game_path.set(short)
             self._game_status_var.set(f"✓ Loaded: {short}")
+            # Bind X key for games that support toggle_xy
+            self.bind("<x>", self._game_key)
+            self.bind("<X>", self._game_key)
         except Exception as exc:
             messagebox.showerror("Game load error", str(exc))
             self._game_status_var.set(f"Error: {exc}")
@@ -1087,6 +1093,14 @@ class YoloStreamApp(tk.Tk):
             )
 
         self.after(self.RENDER_DELAY_MS, self._render_loop)
+
+    def _game_key(self, event=None):
+        """Forward keyboard events to the active game (e.g. X = toggle XY mode)."""
+        with self._game_lock:
+            if self._game is not None and hasattr(self._game, "toggle_xy"):
+                self._game.toggle_xy()
+                mode = "ON" if self._game._xy_mode else "OFF"
+                self._game_status_var.set(f"XY mode: {mode}")
 
     def on_close(self):
         self._stop_stream()
