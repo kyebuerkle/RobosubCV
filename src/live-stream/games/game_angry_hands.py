@@ -41,8 +41,8 @@ from game_plugin import GamePlugin
 SLING_X_FRAC    = 0.22        # slingshot anchor X (fraction of frame width)
 SLING_Y_FRAC    = 0.60        # slingshot anchor Y
 MAX_PULL        = 0.28        # max pull distance (fraction of frame width)
-LAUNCH_SCALE    = 4.2         # velocity multiplier on launch
-GRAVITY         = 680         # px / s²
+LAUNCH_SCALE    = 9.0         # velocity multiplier on launch
+GRAVITY         = 900         # px / s²
 BIRD_R          = 18
 PIG_R           = 22
 PLATFORM_H      = 14

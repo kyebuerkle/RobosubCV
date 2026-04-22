@@ -409,6 +409,9 @@ class Game(GamePlugin):
         shadow_text(frame, xy_txt, (fw // 2 - xw // 2, fh - 25), FONT, 0.5, (120, 120, 160))
 
     def _handle_ready(self, frame, p1_pos, p2_pos, now):
+        if self._p1: self._p1.update_size(self._fw, self._fh)
+        if self._p2: self._p2.update_size(self._fw, self._fh)
+        if self._ball: self._ball.update_size(self._fw, self._fh)
         # 1-second countdown then play
         elapsed = now - self._state_ts
         countdown = max(0, 3 - int(elapsed))
@@ -433,6 +436,11 @@ class Game(GamePlugin):
         shadow_text(frame, num, (fw // 2 - tw // 2, fh // 2 + th // 2), FONT, scale, C_WIN, 4)
 
     def _handle_playing(self, frame, p1_pos, p2_pos, dt, now):
+        # Keep paddle/ball dimensions in sync with actual canvas size
+        fw, fh = self._fw, self._fh
+        if self._p1: self._p1.update_size(fw, fh)
+        if self._p2: self._p2.update_size(fw, fh)
+        if self._ball: self._ball.update_size(fw, fh)
         # Update paddles
         if p1_pos and self._p1:
             self._p1.set_target(*p1_pos)
@@ -449,17 +457,19 @@ class Game(GamePlugin):
         if result == "hit":
             self._hit_flash_t = now
 
-        elif result == "goal_left":
+        elif result == "goal_right":
+            # Ball exited LEFT side — right player (P2) scores
             self._score[1] += 1
             self._goal_scorer = 2
-            self._ball.reset(towards=-1)   # serve toward loser
+            self._ball.reset(towards=-1)   # serve toward P1 (left, the loser)
             self._state    = "goal"
             self._state_ts = now
 
-        elif result == "goal_right":
+        elif result == "goal_left":
+            # Ball exited RIGHT side — left player (P1) scores
             self._score[0] += 1
             self._goal_scorer = 1
-            self._ball.reset(towards=1)
+            self._ball.reset(towards=1)    # serve toward P2 (right, the loser)
             self._state    = "goal"
             self._state_ts = now
 
