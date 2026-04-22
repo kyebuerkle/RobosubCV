@@ -469,6 +469,41 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Button(ctrl, text="Reset Tracks", command=self.tracker.reset).pack(fill=tk.X, pady=4)
 
+        # ── Stream controls ──
+        section(ctrl, "Stream")
+        self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
+                                    style="Accent.TButton", command=self._start_stream)
+        self.start_btn.pack(fill=tk.X, pady=2)
+        self.stop_btn = ttk.Button(ctrl, text="■  Stop Stream",
+                                   command=self._stop_stream, state=tk.DISABLED)
+        self.stop_btn.pack(fill=tk.X, pady=2)
+
+        # ── Label styles ──
+        section(ctrl, "Label Styles")
+        hint(ctrl, "Select label → pick color & thickness")
+        self.label_list_var = tk.StringVar()
+        self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
+                                        state="readonly", width=26)
+        self.label_combo.pack(fill=tk.X, pady=2)
+        self.label_combo.bind("<<ComboboxSelected>>", self._on_label_selected)
+
+        color_row = ttk.Frame(ctrl)
+        color_row.pack(fill=tk.X, pady=2)
+        ttk.Label(color_row, text="Color:").pack(side=tk.LEFT)
+        self.color_preview = tk.Label(color_row, bg=bgr_to_hex(DEFAULT_COLOR_BGR),
+                                      width=4, relief="solid", cursor="hand2")
+        self.color_preview.pack(side=tk.LEFT, padx=6)
+        self.color_preview.bind("<Button-1>", self._pick_color)
+
+        thick_row = ttk.Frame(ctrl)
+        thick_row.pack(fill=tk.X, pady=2)
+        ttk.Label(thick_row, text="Thickness:").pack(side=tk.LEFT)
+        self.thick_var = tk.IntVar(value=DEFAULT_THICKNESS)
+        ttk.Spinbox(thick_row, from_=1, to=10, textvariable=self.thick_var,
+                    width=5, command=self._save_label_style).pack(side=tk.LEFT, padx=6)
+        ttk.Button(ctrl, text="Apply Style",
+                   command=self._save_label_style).pack(fill=tk.X)
+
         # ═══════════════════════════════════════
         #  POSE OVERLAY
         # ═══════════════════════════════════════
@@ -564,41 +599,6 @@ class YoloStreamApp(tk.Tk):
         tk.Label(ctrl, textvariable=self._game_status_var, bg=PANEL_BG,
                  fg="#cba6f7", font=("Segoe UI", 8), wraplength=230,
                  justify=tk.LEFT).pack(anchor="w")
-
-        # ── Stream controls ──
-        section(ctrl, "Stream")
-        self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
-                                    style="Accent.TButton", command=self._start_stream)
-        self.start_btn.pack(fill=tk.X, pady=2)
-        self.stop_btn = ttk.Button(ctrl, text="■  Stop Stream",
-                                   command=self._stop_stream, state=tk.DISABLED)
-        self.stop_btn.pack(fill=tk.X, pady=2)
-
-        # ── Label styles ──
-        section(ctrl, "Label Styles")
-        hint(ctrl, "Select label → pick color & thickness")
-        self.label_list_var = tk.StringVar()
-        self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
-                                        state="readonly", width=26)
-        self.label_combo.pack(fill=tk.X, pady=2)
-        self.label_combo.bind("<<ComboboxSelected>>", self._on_label_selected)
-
-        color_row = ttk.Frame(ctrl)
-        color_row.pack(fill=tk.X, pady=2)
-        ttk.Label(color_row, text="Color:").pack(side=tk.LEFT)
-        self.color_preview = tk.Label(color_row, bg=bgr_to_hex(DEFAULT_COLOR_BGR),
-                                      width=4, relief="solid", cursor="hand2")
-        self.color_preview.pack(side=tk.LEFT, padx=6)
-        self.color_preview.bind("<Button-1>", self._pick_color)
-
-        thick_row = ttk.Frame(ctrl)
-        thick_row.pack(fill=tk.X, pady=2)
-        ttk.Label(thick_row, text="Thickness:").pack(side=tk.LEFT)
-        self.thick_var = tk.IntVar(value=DEFAULT_THICKNESS)
-        ttk.Spinbox(thick_row, from_=1, to=10, textvariable=self.thick_var,
-                    width=5, command=self._save_label_style).pack(side=tk.LEFT, padx=6)
-        ttk.Button(ctrl, text="Apply Style",
-                   command=self._save_label_style).pack(fill=tk.X)
 
         # ── Stats ──
         section(ctrl, "Performance stats")

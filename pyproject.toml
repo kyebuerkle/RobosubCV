@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "robosubcv"
-version = "2.2.7"
+version = "2.3.1"
 description = "Robosub Computer Vision repo for Capstone"
 authors = ["Kye Buerkle <22kyebue@gmail.com>"]
 license = "MIT"
