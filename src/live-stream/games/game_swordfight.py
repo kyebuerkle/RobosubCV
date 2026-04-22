@@ -280,6 +280,7 @@ class Player:
 class Game(GamePlugin):
 
     def __init__(self):
+        super().__init__()
         self._fw, self._fh = 640, 480
         self._state  = "waiting"   # waiting | countdown | playing | win
         self._state_ts = 0.0
@@ -623,6 +624,9 @@ class Game(GamePlugin):
         return left, right
 
     # ── Reset ─────────────────────────────────────────────────
+
+    def reset(self):
+        self._reset()
 
     def _reset(self):
         fw, fh = self._fw, self._fh

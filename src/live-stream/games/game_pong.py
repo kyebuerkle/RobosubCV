@@ -268,6 +268,7 @@ class Ball:
 class Game(GamePlugin):
 
     def __init__(self):
+        super().__init__()
         self._fw   = 640
         self._fh   = 480
         self._state = "waiting"   # waiting | ready | playing | goal | win
@@ -652,6 +653,9 @@ class Game(GamePlugin):
 
     # ── XY mode toggle (called by streamer keyboard hook if wired up,
     #    or you can expose it via the game_status label) ──────
+    def reset(self):
+        self._reset_game()
+
     def toggle_xy(self):
         self._xy_mode = not self._xy_mode
         if self._p1:

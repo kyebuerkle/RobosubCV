@@ -50,6 +50,7 @@ class Game(GamePlugin):
     HIT_FLASH_DUR  = 0.12              # seconds the flash stays visible
 
     def __init__(self):
+        super().__init__()
         self._w = 640
         self._h = 480
         self._bx  = 0.0;  self._by  = 0.0    # ball position (float)

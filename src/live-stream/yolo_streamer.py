@@ -690,7 +690,8 @@ class YoloStreamApp(tk.Tk):
             self._game_status_var.set(f"✓ Loaded: {short}")
             # Bind keys for game plugins
             for seq in ("<x>","<X>","<d>","<D>","<plus>","<minus>",
-                        "<q>","<Q>","<w>","<W>","<a>","<A>","<s>","<S>"):
+                        "<q>","<Q>","<w>","<W>","<a>","<A>","<s>","<S>",
+                        "<space>","<r>","<R>"):
                 self.bind(seq, self._game_key)
         except Exception as exc:
             messagebox.showerror("Game load error", str(exc))
@@ -1029,7 +1030,7 @@ class YoloStreamApp(tk.Tk):
             with self._game_lock:
                 if self._game is not None:
                     try:
-                        annotated = self._game.on_frame(
+                        annotated = self._game._tick(
                             annotated, self._last_kps,
                             self._last_detections,
                             orig_w, orig_h,
@@ -1100,6 +1101,15 @@ class YoloStreamApp(tk.Tk):
             if self._game is None:
                 return
             key = event.keysym if event else ""
+            # Pause / resume (all games)
+            if key == "space":
+                self._game.toggle_pause()
+                return
+            # Reset from pause (all games that implement reset)
+            if key.lower() == 'r' and self._game._paused:
+                self._game.reset()
+                self._game._paused = False
+                return
             # XY mode toggle (pong)
             if key.lower() == 'x' and hasattr(self._game, "toggle_xy"):
                 self._game.toggle_xy()

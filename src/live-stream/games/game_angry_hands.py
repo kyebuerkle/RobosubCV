@@ -368,6 +368,7 @@ class ScorePop:
 class Game(GamePlugin):
 
     def __init__(self):
+        super().__init__()
         self._fw = 640
         self._fh = 480
         self._t_last = time.perf_counter()
@@ -742,22 +743,30 @@ class Game(GamePlugin):
         self._platforms = []
         self._pigs = []
 
-        configs = [
-            # (x_frac, y_frac_above_ground, plat_w)
-            (0.65, 0.22, 80),
-            (0.80, 0.10, 70),
-            (0.72, 0.38, 90),
-            (0.88, 0.30, 70),
-            (0.60, 0.45, 100),
-        ]
-        random.shuffle(configs)
-        n_pigs = random.randint(3, 5)
+        # Right half only, fixed pixel margins so nothing spawns off-screen
+        margin   = PIG_R + 10
+        x_min    = fw * 0.52 + margin
+        x_max    = fw - margin
+        y_min    = PIG_R + 40                  # below top edge
+        y_max    = ground_y - PIG_R - PLATFORM_H - 10   # above ground
+
+        if x_max <= x_min or y_max <= y_min:
+            # Frame too small to place pigs — skip silently
+            return
+
+        n_pigs  = random.randint(3, 5)
+        # Build non-overlapping positions by dividing X range into slots
+        slot_w  = (x_max - x_min) / n_pigs
+        xs      = [x_min + slot_w * i + random.uniform(margin, slot_w - margin)
+                   for i in range(n_pigs)]
+        random.shuffle(xs)
 
         for i in range(n_pigs):
-            xf, yf, pw = configs[i]
-            px = fw * xf + random.uniform(-20, 20)
-            py = ground_y - fh * yf - PLATFORM_H
-            plat = Platform(px, py + PLATFORM_H//2 + PIG_R*2, pw)
+            px  = clamp(xs[i], x_min, x_max)
+            py  = random.uniform(y_min, y_max)
+            py  = clamp(py, y_min, y_max)
+            plat_w = random.randint(60, 100)
+            plat = Platform(px, py + PIG_R + PLATFORM_H // 2 + 2, plat_w)
             pig  = Pig(px, py)
             self._platforms.append(plat)
             self._pigs.append(pig)
@@ -767,6 +776,9 @@ class Game(GamePlugin):
         self._bird = Bird(ax, ay - BIRD_R - 5)
 
     # ── Reset ─────────────────────────────────────────────────
+
+    def reset(self):
+        self._reset()
 
     def toggle_debug(self):
         self._show_debug = not self._show_debug

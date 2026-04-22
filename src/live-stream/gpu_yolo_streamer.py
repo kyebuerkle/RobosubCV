@@ -581,8 +581,10 @@ class YoloStreamApp(tk.Tk):
             self._game_path.set(short)
             self._game_status_var.set(f"✓ Loaded: {short}")
             # Bind X key for games that support toggle_xy
-            self.bind("<x>", self._game_key)
-            self.bind("<X>", self._game_key)
+            for seq in ("<x>","<X>","<d>","<D>","<plus>","<minus>",
+                        "<q>","<Q>","<w>","<W>","<a>","<A>","<s>","<S>",
+                        "<space>","<r>","<R>"):
+                self.bind(seq, self._game_key)
         except Exception as exc:
             messagebox.showerror("Game load error", str(exc))
             self._game_status_var.set(f"Error: {exc}")
@@ -841,7 +843,7 @@ class YoloStreamApp(tk.Tk):
             with self._game_lock:
                 if self._game is not None:
                     try:
-                        annotated = self._game.on_frame(
+                        annotated = self._game._tick(
                             annotated, self._last_kps,
                             self._last_detections,
                             orig_w, orig_h,
@@ -903,12 +905,26 @@ class YoloStreamApp(tk.Tk):
         self.after(self.RENDER_DELAY_MS, self._render_loop)
 
     def _game_key(self, event=None):
-        """Forward keyboard events to the active game (e.g. X = toggle XY mode)."""
+        """Forward keyboard events to active game."""
         with self._game_lock:
-            if self._game is not None and hasattr(self._game, "toggle_xy"):
+            if self._game is None:
+                return
+            key = event.keysym if event else ""
+            if key == "space":
+                self._game.toggle_pause()
+                return
+            if key.lower() == "r" and self._game._paused:
+                self._game.reset()
+                self._game._paused = False
+                return
+            if key.lower() == "x" and hasattr(self._game, "toggle_xy"):
                 self._game.toggle_xy()
                 mode = "ON" if self._game._xy_mode else "OFF"
                 self._game_status_var.set(f"XY mode: {mode}")
+            if key.lower() == "d" and hasattr(self._game, "toggle_debug"):
+                self._game.toggle_debug()
+            if hasattr(self._game, "tune"):
+                self._game.tune(key)
 
     def on_close(self):
         self._stop_stream()
