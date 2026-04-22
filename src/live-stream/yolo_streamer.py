@@ -1030,7 +1030,8 @@ class YoloStreamApp(tk.Tk):
             with self._game_lock:
                 if self._game is not None:
                     try:
-                        annotated = self._game._tick(
+                        _call = getattr(self._game, "_tick", None) or self._game.on_frame
+                        annotated = _call(
                             annotated, self._last_kps,
                             self._last_detections,
                             orig_w, orig_h,
