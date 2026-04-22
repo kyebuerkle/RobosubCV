@@ -181,6 +181,9 @@ class YoloStreamApp(tk.Tk):
         self.show_keypoints_var = tk.BooleanVar(value=True)
         self.show_skeleton_var  = tk.BooleanVar(value=True)
 
+        # ── Mirror ──
+        self.mirror_var = tk.BooleanVar(value=True)
+
         # ── Game plugin ──
         self._game      = None
         self._game_path = tk.StringVar(value="No game loaded")
@@ -394,6 +397,8 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Checkbutton(ctrl, text="Show bounding boxes",
                         variable=self.show_boxes_var).pack(anchor="w")
+        ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
+                        variable=self.mirror_var).pack(anchor="w")
 
         kp_row = ttk.Frame(ctrl)
         kp_row.pack(fill=tk.X, pady=(4, 0))
@@ -751,30 +756,34 @@ class YoloStreamApp(tk.Tk):
             except queue.Empty:
                 continue
 
+            if self.mirror_var.get():
+                frame = cv2.flip(frame, 1)
+
             frame_count += 1
             run_infer = (frame_count % max(1, self.skip_var.get()) == 0)
 
             orig_h, orig_w = frame.shape[:2]
-            infer_frame = cv2.resize(frame, (self.imgsz_var.get(), self.imgsz_var.get()))
 
             if run_infer:
+                imgsz = self.imgsz_var.get()
                 t0 = time.perf_counter()
+                # Pass original frame; YOLO letterboxes internally.
+                # Pre-resizing to a square causes keypoints to be None.
                 results = self.model(
-                    infer_frame,
+                    frame,
                     verbose=False,
                     conf=self.confidence.get(),
                     device=DEVICE,
                     half=use_half,
-                    imgsz=self.imgsz_var.get(),
+                    imgsz=imgsz,
                 )
                 t1 = time.perf_counter()
                 self._infer_fps_times.append(t1)
                 if len(self._infer_fps_times) > 30:
                     self._infer_fps_times.pop(0)
 
-                infer_h, infer_w = infer_frame.shape[:2]
-                sx = orig_w / infer_w
-                sy = orig_h / infer_h
+                # Coords are in original-frame space when YOLO handles resizing
+                sx, sy = 1.0, 1.0
 
                 raw_boxes = []
                 for result in results:
@@ -785,8 +794,8 @@ class YoloStreamApp(tk.Tk):
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
                         raw_boxes.append((
                             label, conf_score,
-                            int(x1 * sx), int(y1 * sy),
-                            int(x2 * sx), int(y2 * sy),
+                            int(x1), int(y1),
+                            int(x2), int(y2),
                         ))
 
                 if self.tracking_enabled.get():

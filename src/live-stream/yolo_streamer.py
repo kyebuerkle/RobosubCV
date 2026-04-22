@@ -217,6 +217,9 @@ class YoloStreamApp(tk.Tk):
         self.show_keypoints_var = tk.BooleanVar(value=True)
         self.show_skeleton_var  = tk.BooleanVar(value=True)
 
+        # ── Mirror ──
+        self.mirror_var = tk.BooleanVar(value=True)
+
         # ── Game plugin ──
         self._game        = None      # current game instance
         self._game_path   = tk.StringVar(value="No game loaded")
@@ -469,41 +472,6 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Button(ctrl, text="Reset Tracks", command=self.tracker.reset).pack(fill=tk.X, pady=4)
 
-# ── Stream controls ──
-        section(ctrl, "Stream")
-        self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
-                                    style="Accent.TButton", command=self._start_stream)
-        self.start_btn.pack(fill=tk.X, pady=2)
-        self.stop_btn = ttk.Button(ctrl, text="■  Stop Stream",
-                                   command=self._stop_stream, state=tk.DISABLED)
-        self.stop_btn.pack(fill=tk.X, pady=2)
-
-        # ── Label styles ──
-        section(ctrl, "Label Styles")
-        hint(ctrl, "Select label → pick color & thickness")
-        self.label_list_var = tk.StringVar()
-        self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
-                                        state="readonly", width=26)
-        self.label_combo.pack(fill=tk.X, pady=2)
-        self.label_combo.bind("<<ComboboxSelected>>", self._on_label_selected)
-
-        color_row = ttk.Frame(ctrl)
-        color_row.pack(fill=tk.X, pady=2)
-        ttk.Label(color_row, text="Color:").pack(side=tk.LEFT)
-        self.color_preview = tk.Label(color_row, bg=bgr_to_hex(DEFAULT_COLOR_BGR),
-                                      width=4, relief="solid", cursor="hand2")
-        self.color_preview.pack(side=tk.LEFT, padx=6)
-        self.color_preview.bind("<Button-1>", self._pick_color)
-
-        thick_row = ttk.Frame(ctrl)
-        thick_row.pack(fill=tk.X, pady=2)
-        ttk.Label(thick_row, text="Thickness:").pack(side=tk.LEFT)
-        self.thick_var = tk.IntVar(value=DEFAULT_THICKNESS)
-        ttk.Spinbox(thick_row, from_=1, to=10, textvariable=self.thick_var,
-                    width=5, command=self._save_label_style).pack(side=tk.LEFT, padx=6)
-        ttk.Button(ctrl, text="Apply Style",
-                   command=self._save_label_style).pack(fill=tk.X)
-
         # ═══════════════════════════════════════
         #  POSE OVERLAY
         # ═══════════════════════════════════════
@@ -511,6 +479,8 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Checkbutton(ctrl, text="Show bounding boxes",
                         variable=self.show_boxes_var).pack(anchor="w")
+        ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
+                        variable=self.mirror_var).pack(anchor="w")
 
         kp_row = ttk.Frame(ctrl)
         kp_row.pack(fill=tk.X, pady=(4, 0))
@@ -599,6 +569,41 @@ class YoloStreamApp(tk.Tk):
         tk.Label(ctrl, textvariable=self._game_status_var, bg=PANEL_BG,
                  fg="#cba6f7", font=("Segoe UI", 8), wraplength=230,
                  justify=tk.LEFT).pack(anchor="w")
+
+        # ── Stream controls ──
+        section(ctrl, "Stream")
+        self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
+                                    style="Accent.TButton", command=self._start_stream)
+        self.start_btn.pack(fill=tk.X, pady=2)
+        self.stop_btn = ttk.Button(ctrl, text="■  Stop Stream",
+                                   command=self._stop_stream, state=tk.DISABLED)
+        self.stop_btn.pack(fill=tk.X, pady=2)
+
+        # ── Label styles ──
+        section(ctrl, "Label Styles")
+        hint(ctrl, "Select label → pick color & thickness")
+        self.label_list_var = tk.StringVar()
+        self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
+                                        state="readonly", width=26)
+        self.label_combo.pack(fill=tk.X, pady=2)
+        self.label_combo.bind("<<ComboboxSelected>>", self._on_label_selected)
+
+        color_row = ttk.Frame(ctrl)
+        color_row.pack(fill=tk.X, pady=2)
+        ttk.Label(color_row, text="Color:").pack(side=tk.LEFT)
+        self.color_preview = tk.Label(color_row, bg=bgr_to_hex(DEFAULT_COLOR_BGR),
+                                      width=4, relief="solid", cursor="hand2")
+        self.color_preview.pack(side=tk.LEFT, padx=6)
+        self.color_preview.bind("<Button-1>", self._pick_color)
+
+        thick_row = ttk.Frame(ctrl)
+        thick_row.pack(fill=tk.X, pady=2)
+        ttk.Label(thick_row, text="Thickness:").pack(side=tk.LEFT)
+        self.thick_var = tk.IntVar(value=DEFAULT_THICKNESS)
+        ttk.Spinbox(thick_row, from_=1, to=10, textvariable=self.thick_var,
+                    width=5, command=self._save_label_style).pack(side=tk.LEFT, padx=6)
+        ttk.Button(ctrl, text="Apply Style",
+                   command=self._save_label_style).pack(fill=tk.X)
 
         # ── Stats ──
         section(ctrl, "Performance stats")
@@ -925,6 +930,9 @@ class YoloStreamApp(tk.Tk):
             except queue.Empty:
                 continue
 
+            if self.mirror_var.get():
+                frame = cv2.flip(frame, 1)
+
             frame_count += 1
             skip      = max(1, int(self.skip_var.get()))
             run_infer = (frame_count % skip == 0)
@@ -933,11 +941,12 @@ class YoloStreamApp(tk.Tk):
 
             if run_infer:
                 imgsz = self.imgsz_var.get()
-                infer_frame = cv2.resize(frame, (imgsz, imgsz))
 
                 t0 = time.perf_counter()
+                # Pass original frame; YOLO letterboxes internally.
+                # Pre-resizing to a square causes keypoints to be None.
                 results = self.model(
-                    infer_frame,
+                    frame,
                     verbose=False,
                     conf=self.confidence.get(),
                     device="cpu",
@@ -950,8 +959,8 @@ class YoloStreamApp(tk.Tk):
                 if len(self._infer_fps_times) > 30:
                     self._infer_fps_times.pop(0)
 
-                sx = orig_w / imgsz
-                sy = orig_h / imgsz
+                # Coords are in original-frame space when YOLO handles resizing
+                sx, sy = 1.0, 1.0
 
                 raw_boxes = []
                 for result in results:
@@ -962,8 +971,8 @@ class YoloStreamApp(tk.Tk):
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
                         raw_boxes.append((
                             label, conf_score,
-                            int(x1 * sx), int(y1 * sy),
-                            int(x2 * sx), int(y2 * sy),
+                            int(x1), int(y1),
+                            int(x2), int(y2),
                         ))
 
                 if self.tracking_enabled.get():
