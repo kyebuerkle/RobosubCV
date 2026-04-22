@@ -189,6 +189,7 @@ class YoloStreamApp(tk.Tk):
         self._game_path = tk.StringVar(value="No game loaded")
         self._game_lock = threading.Lock()
         self._last_kps: list = []
+        self._last_detections: list = []
 
         # ── Tracker ──
         self.tracker = ObjectTracker(
@@ -572,7 +573,8 @@ class YoloStreamApp(tk.Tk):
                 if self.streaming:
                     cw = self.canvas.winfo_width()
                     ch = self.canvas.winfo_height()
-                    self._game.on_start(cw if cw > 1 else 854, ch if ch > 1 else 480)
+                    cn = list(self.model.names.values()) if self.model else None
+                    self._game.on_start(cw if cw > 1 else 854, ch if ch > 1 else 480, cn)
             short = path.split("/")[-1].split("\\")[-1]
             self._game_path.set(short)
             self._game_status_var.set(f"✓ Loaded: {short}")
@@ -693,7 +695,8 @@ class YoloStreamApp(tk.Tk):
         with self._game_lock:
             if self._game is not None:
                 try:
-                    self._game.on_start(1280, 720)
+                    cn = list(self.model.names.values()) if self.model else None
+                    self._game.on_start(1280, 720, cn)
                 except Exception:
                     pass
 
@@ -806,6 +809,7 @@ class YoloStreamApp(tk.Tk):
 
                 last_results = results
                 last_scale   = (sx, sy)   # cache alongside results
+                self._last_detections = list(last_boxes)  # snapshot for game
                 self._last_kps = extract_keypoints(
                     results, scale_xy=(sx, sy),
                     conf_threshold=self.pose_styles.conf_threshold,
@@ -833,7 +837,9 @@ class YoloStreamApp(tk.Tk):
                 if self._game is not None:
                     try:
                         annotated = self._game.on_frame(
-                            annotated, self._last_kps, orig_w, orig_h,
+                            annotated, self._last_kps,
+                            self._last_detections,
+                            orig_w, orig_h,
                         )
                     except Exception as exc:
                         cv2.putText(annotated, f"Game error: {exc}",

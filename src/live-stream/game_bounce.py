@@ -63,7 +63,7 @@ class Game(GamePlugin):
 
     # ── GamePlugin API ─────────────────────────────────────────
 
-    def on_start(self, frame_w: int, frame_h: int) -> None:
+    def on_start(self, frame_w: int, frame_h: int, class_names=None) -> None:
         self._w, self._h = frame_w, frame_h
         self._reset_ball()
         self._score  = 0
@@ -76,6 +76,7 @@ class Game(GamePlugin):
         self,
         frame: np.ndarray,
         keypoints: list[list[tuple[float, float, float]]],
+        detections: list,
         frame_w: int,
         frame_h: int,
     ) -> np.ndarray:
