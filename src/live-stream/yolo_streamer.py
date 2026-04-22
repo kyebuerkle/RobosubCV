@@ -604,8 +604,6 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Button(ctrl, text="Toggle XY mode  [X]",
                    command=self._game_key).pack(fill=tk.X, pady=(0, 2))
-        ttk.Button(ctrl, text="Toggle XY mode  [X]",
-                   command=self._game_key).pack(fill=tk.X, pady=(0, 2))
         hint(ctrl, "Angry Hands keys: +/- ratio  Q/W tips  A/S conf  D debug")
         self._game_status_var = tk.StringVar(value="No game loaded.")
         tk.Label(ctrl, textvariable=self._game_status_var, bg=PANEL_BG,
