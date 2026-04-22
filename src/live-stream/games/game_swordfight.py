@@ -45,7 +45,7 @@ LUNGE_PENALTY    = 1.5      # damage taken multiplier when lunging
 PARRY_THRESHOLD  = 65       # degrees between blades = parry
 PARRY_REDUCTION  = 0.30     # multiplier on damage when parrying
 SPEED_RATIO_PWR  = 0.6      # how much speed advantage matters
-CLASH_COOLDOWN   = 0.45     # seconds between clashes
+CLASH_COOLDOWN   = 0.30     # seconds between clashes
 READY_HOLD       = 1.0      # seconds both hands visible to start
 BLADE_LEN_BASE   = 0.38     # fraction of frame width
 BLADE_LEN_LUNGE  = 0.55
@@ -157,16 +157,23 @@ class Player:
             self.hilt = (int(fw * 0.92), int(fh * 0.88))
 
         # Smoothed hand position (tip target)
-        self.hand_x = float(self.hilt[0])
-        self.hand_y = float(fh * 0.3)
+        self.hand_x = float(fw * 0.25 if side == "left" else fw * 0.75)
+        self.hand_y = float(fh * 0.35)
+
+        # Velocity — used to coast when detection drops out
+        self.vel_x = 0.0
+        self.vel_y = 0.0
+
+        # How long since we last had a real detection (seconds)
+        self.lost_for = 0.0
+        # Max seconds to coast on momentum before freezing
+        self.coast_max = 0.55
 
         # Speed tracking for clash resolution
-        self._prev_hand = (self.hand_x, self.hand_y)
         self.speed = 0.0   # px/s
 
         # Damage flash
         self.hit_ts   = -99.0
-        self.hit_flash = 0.0
 
         # Seen-since for ready tracking
         self.seen_since: float | None = None
@@ -192,12 +199,38 @@ class Player:
         return (hx + dx * scale, hy + dy * scale)
 
     def update_hand(self, hx: float, hy: float, dt: float):
-        alpha = clamp(0.22 + dt * 5, 0.0, 1.0)
-        prev  = (self.hand_x, self.hand_y)
+        """Called when we actually have a detection."""
+        alpha = clamp(0.28 + dt * 4, 0.0, 1.0)
+        prev_x, prev_y = self.hand_x, self.hand_y
         self.hand_x = lerp(self.hand_x, hx, alpha)
         self.hand_y = lerp(self.hand_y, hy, alpha)
-        dist = math.hypot(self.hand_x - prev[0], self.hand_y - prev[1])
-        self.speed = lerp(self.speed, dist / max(dt, 1e-4), 0.3)
+        dx = self.hand_x - prev_x
+        dy = self.hand_y - prev_y
+        # Track instantaneous velocity for coasting
+        self.vel_x = lerp(self.vel_x, dx / max(dt, 1e-4), 0.4)
+        self.vel_y = lerp(self.vel_y, dy / max(dt, 1e-4), 0.4)
+        dist = math.hypot(dx, dy)
+        self.speed = lerp(self.speed, dist / max(dt, 1e-4), 0.35)
+        self.lost_for = 0.0
+
+    def coast(self, dt: float):
+        """Called when detection is missing — keep sword moving on momentum."""
+        self.lost_for += dt
+        if self.lost_for > self.coast_max:
+            # Freeze — damp velocity to zero
+            self.vel_x *= 0.85
+            self.vel_y *= 0.85
+        else:
+            # Decay velocity and apply
+            decay = max(0.0, 1.0 - self.lost_for / self.coast_max)
+            self.vel_x *= (1.0 - dt * 3.5)
+            self.vel_y *= (1.0 - dt * 3.5)
+            self.hand_x += self.vel_x * dt * decay
+            self.hand_y += self.vel_y * dt * decay
+        # Keep within frame
+        self.hand_x = clamp(self.hand_x, 0, self.fw)
+        self.hand_y = clamp(self.hand_y, 0, self.fh)
+        self.speed  = lerp(self.speed, 0.0, dt * 4)
 
     def take_damage(self, dmg: float, now: float):
         self.hp = max(0.0, self.hp - dmg)
@@ -381,8 +414,12 @@ class Game(GamePlugin):
 
         if p1_pos:
             self._p1.update_hand(*p1_pos, 0.016)
+        else:
+            self._p1.coast(0.016)
         if p2_pos:
             self._p2.update_hand(*p2_pos, 0.016)
+        else:
+            self._p2.coast(0.016)
         self._p1.draw(frame, now)
         self._p2.draw(frame, now)
         self._draw_hud(frame)
@@ -399,20 +436,31 @@ class Game(GamePlugin):
                     FONT, scale, (200, 200, 255), 4)
 
     def _do_playing(self, frame, p1_pos, p2_pos, dt, now):
-        # Move paddles
+        # Move swords — coast on momentum when detection drops
         if p1_pos:
             self._p1.update_hand(*p1_pos, dt)
+        else:
+            self._p1.coast(dt)
         if p2_pos:
             self._p2.update_hand(*p2_pos, dt)
+        else:
+            self._p2.coast(dt)
 
         self._clash_cooldown = max(0.0, self._clash_cooldown - dt)
 
-        # Clash detection
+        # Clash detection — segment intersect + proximity fallback
+        # (proximity catches fast-moving blades that skip through each other)
         if self._clash_cooldown <= 0:
             pt = seg_intersect(
                 self._p1.hilt, self._p1.tip,
                 self._p2.hilt, self._p2.tip,
             )
+            if pt is None:
+                # Proximity check: if tips are very close, count as clash
+                tip1 = self._p1.tip
+                tip2 = self._p2.tip
+                if math.hypot(tip1[0]-tip2[0], tip1[1]-tip2[1]) < 38:
+                    pt = ((tip1[0]+tip2[0])/2, (tip1[1]+tip2[1])/2)
             if pt:
                 self._resolve_clash(pt, now)
 
