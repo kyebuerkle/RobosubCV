@@ -30,7 +30,6 @@ from __future__ import annotations
 import math
 import random
 import time
-from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -160,16 +159,16 @@ def detect_hand_state(keypoints, detections, fw):
 
 # ── Bird ──────────────────────────────────────────────────────
 
-@dataclass
 class Bird:
-    x: float
-    y: float
-    vx: float = 0.0
-    vy: float = 0.0
-    launched: bool = False
-    dead: bool = False
-    trail: list = field(default_factory=list)
-    angle: float = 0.0   # spin
+    def __init__(self, x: float, y: float):
+        self.x        = x
+        self.y        = y
+        self.vx       = 0.0
+        self.vy       = 0.0
+        self.launched = False
+        self.dead     = False
+        self.trail    = []
+        self.angle    = 0.0
 
     def launch(self, vx, vy):
         self.vx = vx
@@ -213,12 +212,12 @@ class Bird:
 
 # ── Pig ──────────────────────────────────────────────────────
 
-@dataclass
 class Pig:
-    x: float
-    y: float
-    hp: int = 2
-    hit_ts: float = -99.0
+    def __init__(self, x: float, y: float):
+        self.x      = x
+        self.y      = y
+        self.hp     = 2
+        self.hit_ts = -99.0
 
     @property
     def dead(self):
@@ -250,11 +249,11 @@ class Pig:
 
 # ── Platform ──────────────────────────────────────────────────
 
-@dataclass
 class Platform:
-    x: float
-    y: float
-    w: float
+    def __init__(self, x: float, y: float, w: float):
+        self.x = x
+        self.y = y
+        self.w = w
 
     def draw(self, frame):
         x1 = int(self.x - self.w/2)
@@ -297,13 +296,13 @@ class Slingshot:
 
 # ── Score pop ────────────────────────────────────────────────
 
-@dataclass
 class ScorePop:
-    x: float
-    y: float
-    txt: str
-    ts: float
-    dur: float = 1.1
+    def __init__(self, x: float, y: float, txt: str, ts: float, dur: float = 1.1):
+        self.x   = x
+        self.y   = y
+        self.txt = txt
+        self.ts  = ts
+        self.dur = dur
 
     def alive(self, now):
         return now - self.ts < self.dur
@@ -326,6 +325,24 @@ class Game(GamePlugin):
         self._fw = 640
         self._fh = 480
         self._t_last = time.perf_counter()
+        # Initialise everything to safe defaults before _reset touches them
+        self._sling      = None
+        self._bird       = None
+        self._pigs       = []
+        self._platforms  = []
+        self._pops       = []
+        self._score      = 0
+        self._birds_left = NUM_BIRDS
+        self._phase      = "waiting"
+        self._phase_ts   = self._t_last
+        self._pull_x     = float(self._fw * SLING_X_FRAC)
+        self._pull_y     = float(self._fh * SLING_Y_FRAC)
+        self._sx         = self._pull_x
+        self._sy         = self._pull_y
+        self._svx        = 0.0
+        self._svy        = 0.0
+        self._hand_lost  = 0.0
+        self._cur_state  = 'none'
         self._reset()
 
     # ── API ───────────────────────────────────────────────────
@@ -363,7 +380,8 @@ class Game(GamePlugin):
 
     def _do_waiting(self, frame, now):
         fw, fh = self._fw, self._fh
-        self._sling.draw(frame)
+        if self._sling:
+            self._sling.draw(frame)
         self._draw_scene(frame, now)
 
         # Tint
