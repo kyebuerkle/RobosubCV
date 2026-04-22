@@ -469,7 +469,7 @@ class YoloStreamApp(tk.Tk):
 
         ttk.Button(ctrl, text="Reset Tracks", command=self.tracker.reset).pack(fill=tk.X, pady=4)
 
-        # ── Stream controls ──
+# ── Stream controls ──
         section(ctrl, "Stream")
         self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
                                     style="Accent.TButton", command=self._start_stream)
@@ -734,11 +734,15 @@ class YoloStreamApp(tk.Tk):
             self.update_idletasks()
 
             backend = self.backend_var.get()
+            # Keep the original .pt filename for display purposes
+            display_name = path.split("/")[-1].split("\\")[-1]
+            original_names = None   # will be populated from .pt before export
 
             if path.endswith(".pt") and backend in ("onnx", "openvino"):
                 self.status_var.set(f"Exporting to {backend.upper()}… (one-time, please wait)")
                 self.update_idletasks()
                 tmp = YOLO(path)
+                original_names = tmp.names   # save names before export
                 export_fmt = "onnx" if backend == "onnx" else "openvino"
                 exported_path = tmp.export(format=export_fmt, imgsz=self.imgsz_var.get())
                 path = str(exported_path)
@@ -748,13 +752,16 @@ class YoloStreamApp(tk.Tk):
             self.model = YOLO(path)
             self._loaded_pt_path = path
 
+            # Restore names from original .pt if ONNX export lost them
+            if original_names is not None and not self.model.names:
+                self.model.names = original_names
+
             self.status_var.set("Warming up model…")
             self.update_idletasks()
             dummy = np.zeros((self.imgsz_var.get(), self.imgsz_var.get(), 3), dtype=np.uint8)
             self.model(dummy, verbose=False, device="cpu")
 
-            short = path.split("/")[-1].split("\\")[-1]
-            self.model_path_str.set(short)
+            self.model_path_str.set(display_name)
             self.status_var.set(
                 f"Model ready — {len(self.model.names)} classes  [{backend.upper()}]"
             )
@@ -909,6 +916,7 @@ class YoloStreamApp(tk.Tk):
         frame_count  = 0
         last_boxes: list = []
         last_results = []
+        last_scale   = (1.0, 1.0)
         last_infer_ms = 0.0
 
         while self.streaming:
@@ -965,6 +973,7 @@ class YoloStreamApp(tk.Tk):
                     last_boxes = raw_boxes
 
                 last_results = results
+                last_scale   = (sx, sy)   # cache alongside results
                 # Extract keypoints for game (scaled to orig res)
                 self._last_kps = extract_keypoints(
                     results,
@@ -990,10 +999,7 @@ class YoloStreamApp(tk.Tk):
 
             # Pose keypoints + skeleton
             if last_results and (self.pose_styles.show_keypoints or self.pose_styles.show_skeleton):
-                imgsz = self.imgsz_var.get()
-                sx = orig_w / imgsz
-                sy = orig_h / imgsz
-                self.pose_renderer.draw(annotated, last_results, scale_xy=(sx, sy))
+                self.pose_renderer.draw(annotated, last_results, scale_xy=last_scale)
 
             # Latency overlay
             cv2.putText(annotated, f"Infer: {last_infer_ms:.0f}ms",

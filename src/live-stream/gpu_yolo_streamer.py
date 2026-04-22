@@ -742,6 +742,7 @@ class YoloStreamApp(tk.Tk):
         frame_count = 0
         last_boxes: list = []
         last_results = []
+        last_scale   = (1.0, 1.0)
         use_half = self.use_half.get() and DEVICE.startswith("cuda")
 
         while self.streaming:
@@ -795,6 +796,7 @@ class YoloStreamApp(tk.Tk):
                     last_boxes = raw_boxes
 
                 last_results = results
+                last_scale   = (sx, sy)   # cache alongside results
                 self._last_kps = extract_keypoints(
                     results, scale_xy=(sx, sy),
                     conf_threshold=self.pose_styles.conf_threshold,
@@ -815,10 +817,7 @@ class YoloStreamApp(tk.Tk):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
             if last_results and (self.pose_styles.show_keypoints or self.pose_styles.show_skeleton):
-                imgsz = self.imgsz_var.get()
-                sx = orig_w / imgsz
-                sy = orig_h / imgsz
-                self.pose_renderer.draw(annotated, last_results, scale_xy=(sx, sy))
+                self.pose_renderer.draw(annotated, last_results, scale_xy=last_scale)
 
             # ── Game overlay ──
             with self._game_lock:

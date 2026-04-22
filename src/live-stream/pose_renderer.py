@@ -148,6 +148,8 @@ class PoseRenderer:
                 continue
 
             kp_data = result.keypoints.data   # shape: (N, K, 3) — x, y, conf
+            if kp_data.shape[0] == 0:         # no detections this frame
+                continue
             n_instances, n_kp, _ = kp_data.shape
 
             # Choose / cache skeleton
@@ -208,6 +210,8 @@ def extract_keypoints(
         if result.keypoints is None:
             continue
         kp_data = result.keypoints.data
+        if kp_data.shape[0] == 0:
+            continue
         n_instances, n_kp, _ = kp_data.shape
 
         for inst in range(n_instances):
