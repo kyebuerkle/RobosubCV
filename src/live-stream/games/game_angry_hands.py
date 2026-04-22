@@ -48,9 +48,11 @@ PIG_R           = 22
 PLATFORM_H      = 14
 TRAIL_LEN       = 22
 COAST_SEC       = 0.5         # seconds to coast slingshot when hand lost
-OPEN_KP_THRESH  = 0.28        # min keypoint conf to count as "visible"
-OPEN_MIN_KPS    = 5           # min keypoints above thresh to count as open
-FINGER_SPREAD   = 0.09        # min wrist-to-tip dist (frac of frame w) for "open"
+# Hand-open detection — all tunable via in-game debug panel
+OPEN_KP_THRESH      = 0.25    # min keypoint confidence to use a point
+OPEN_RATIO_THRESH   = 1.18    # tip_dist / knuckle_dist must exceed this to count as open
+                               # 1.0 = tips exactly as far as knuckles, raise to require more spread
+OPEN_MIN_TIPS       = 3       # how many fingers must pass the ratio test (out of 5)
 NEXT_BIRD_DELAY = 1.4         # seconds after bird lands/falls before next
 NUM_BIRDS       = 5           # birds per round
 SCORE_PER_PIG   = 100
@@ -95,9 +97,67 @@ def lerp(a, b, t):
 
 # ── Hand state detection ──────────────────────────────────────
 
-def detect_hand_state(keypoints, detections, fw):
+# 21-point hand keypoint indices
+# Wrist: 0
+# Knuckles (MCP): 1,5,9,13,17
+# Tips:           4,8,12,16,20
+_WRIST      = 0
+_TIP_IDS    = [4, 8, 12, 16, 20]
+_KNUCKLE_IDS= [1, 5,  9, 13, 17]   # MCP = base knuckle, closest to palm
+
+
+def _hand_open_ratio(inst, thresh=OPEN_KP_THRESH, ratio_thresh=OPEN_RATIO_THRESH,
+                     min_tips=OPEN_MIN_TIPS):
     """
-    Returns (state, hand_x, hand_y) where state is:
+    Returns (is_open, ratio_value, debug_dict).
+
+    Logic:
+      For each finger, measure:
+        tip_dist    = distance from wrist to fingertip
+        knuckle_dist= distance from wrist to base knuckle (MCP)
+
+      ratio = tip_dist / knuckle_dist
+        > ratio_thresh → finger is EXTENDED   (tip further than knuckle)
+        < ratio_thresh → finger is CURLED     (tip folded back)
+
+      is_open = at least min_tips fingers are extended.
+
+    This works because in a fist the tips curl back toward the palm
+    so tip_dist < knuckle_dist (ratio < 1), whereas in an open hand
+    tips are always further than knuckles (ratio > 1.15+).
+    """
+    if not inst or len(inst) < 21:
+        return False, 0.0, {}
+
+    wx, wy, wc = inst[_WRIST]
+    if wc < thresh:
+        return False, 0.0, {}
+
+    ratios = {}
+    extended = 0
+    for tip_id, knuck_id in zip(_TIP_IDS, _KNUCKLE_IDS):
+        tx, ty, tc = inst[tip_id]
+        kx, ky, kc = inst[knuck_id]
+        if tc < thresh or kc < thresh:
+            continue
+        tip_d   = math.hypot(tx - wx, ty - wy)
+        knuck_d = math.hypot(kx - wx, ky - wy)
+        if knuck_d < 1:
+            continue
+        r = tip_d / knuck_d
+        ratios[tip_id] = r
+        if r > ratio_thresh:
+            extended += 1
+
+    avg_ratio = sum(ratios.values()) / len(ratios) if ratios else 0.0
+    is_open   = extended >= min_tips
+    return is_open, avg_ratio, {"ratios": ratios, "extended": extended}
+
+
+def detect_hand_state(keypoints, detections, fw,
+                      kp_thresh=None, ratio_thresh=None, min_tips=None):
+    """
+    Returns (state, hand_x, hand_y, debug_info) where state is:
       'open'   — hand open, ready to release
       'closed' — fist / no keypoints, ready to pull
       'none'   — no hand detected at all
@@ -105,56 +165,42 @@ def detect_hand_state(keypoints, detections, fw):
     Uses left half of screen only (slingshot side).
     Falls back to detection box centre when keypoints are absent.
     """
-    mid = fw / 2
+    if kp_thresh   is None: kp_thresh   = OPEN_KP_THRESH
+    if ratio_thresh is None: ratio_thresh = OPEN_RATIO_THRESH
+    if min_tips    is None: min_tips    = OPEN_MIN_TIPS
 
-    # Gather candidates from left half
-    # Try keypoints first
+    mid = fw / 2
     best_inst = None
     best_conf = 0.0
+
     for inst in keypoints:
-        if not inst:
+        if not inst or len(inst) < 1:
             continue
-        # Use wrist (kp0) or centroid
         x0, y0, c0 = inst[0]
-        good_kps = [(x, y, c) for x, y, c in inst if c > OPEN_KP_THRESH]
-        if not good_kps:
+        good = [(x,y,c) for x,y,c in inst if c > kp_thresh]
+        if not good:
             continue
-        cx = sum(p[0] for p in good_kps) / len(good_kps)
-        cy = sum(p[1] for p in good_kps) / len(good_kps)
+        cx = sum(p[0] for p in good) / len(good)
+        cy = sum(p[1] for p in good) / len(good)
         if cx < mid and c0 > best_conf:
             best_conf = c0
             best_inst = (inst, cx, cy)
 
     if best_inst is not None:
         inst, cx, cy = best_inst
-        good_kps = [(x, y, c) for x, y, c in inst if c > OPEN_KP_THRESH]
-        n_good = len(good_kps)
-
-        # Check finger spread: distance from wrist to fingertips
-        wrist_x, wrist_y = inst[0][0], inst[0][1]
-        # Fingertips in 21-pt model: 4,8,12,16,20
-        tip_ids = [4, 8, 12, 16, 20]
-        spreads = []
-        for tid in tip_ids:
-            if tid < len(inst):
-                tx, ty, tc = inst[tid]
-                if tc > OPEN_KP_THRESH:
-                    d = math.hypot(tx - wrist_x, ty - wrist_y) / fw
-                    spreads.append(d)
-
-        avg_spread = sum(spreads) / len(spreads) if spreads else 0.0
-        is_open = (n_good >= OPEN_MIN_KPS and avg_spread >= FINGER_SPREAD)
+        is_open, avg_ratio, dbg = _hand_open_ratio(
+            inst, kp_thresh, ratio_thresh, min_tips)
         state = 'open' if is_open else 'closed'
-        return state, cx, cy
+        dbg['cx'] = cx;  dbg['cy'] = cy;  dbg['avg_ratio'] = avg_ratio
+        return state, cx, cy, dbg
 
-    # No keypoints on left side — check detection boxes
+    # No keypoints — check detection boxes
     for (label, conf, x1, y1, x2, y2) in detections:
         cx, cy = (x1+x2)/2, (y1+y2)/2
         if cx < mid and conf > 0.25:
-            # Box only, no keypoints = treat as closed fist
-            return 'closed', cx, cy
+            return 'closed', cx, cy, {}
 
-    return 'none', 0.0, 0.0
+    return 'none', 0.0, 0.0, {}
 
 
 # ── Bird ──────────────────────────────────────────────────────
@@ -343,6 +389,14 @@ class Game(GamePlugin):
         self._svy        = 0.0
         self._hand_lost  = 0.0
         self._cur_state  = 'none'
+
+        # ── Live tuning (edited via debug panel) ──
+        self._kp_thresh    = OPEN_KP_THRESH
+        self._ratio_thresh = OPEN_RATIO_THRESH
+        self._min_tips     = OPEN_MIN_TIPS
+        self._show_debug   = True   # toggle with D key
+        self._last_dbg     = {}
+
         self._reset()
 
     # ── API ───────────────────────────────────────────────────
@@ -357,7 +411,10 @@ class Game(GamePlugin):
         self._t_last = now
         self._fw, self._fh = fw, fh
 
-        state, hx, hy = detect_hand_state(keypoints, detections, fw)
+        state, hx, hy, dbg = detect_hand_state(
+            keypoints, detections, fw,
+            self._kp_thresh, self._ratio_thresh, self._min_tips)
+        self._last_dbg = dbg
         self._update_hand_coast(state, hx, hy, dt, now)
 
         if self._phase == "waiting":
@@ -374,6 +431,8 @@ class Game(GamePlugin):
             self._do_lose(frame, now)
 
         self._draw_hud(frame, now)
+        if self._show_debug:
+            self._draw_debug(frame)
         return frame
 
     # ── Phases ────────────────────────────────────────────────
@@ -417,7 +476,7 @@ class Game(GamePlugin):
             raw_pull_x = ax
             raw_pull_y = ay
 
-        # Clamp pull distance
+        # Clamp pull distance to max pull radius
         max_px = fw * MAX_PULL
         dx = raw_pull_x - ax
         dy = raw_pull_y - ay
@@ -425,6 +484,7 @@ class Game(GamePlugin):
         if dist > max_px:
             scale = max_px / dist
             dx *= scale;  dy *= scale
+            dist = max_px
         self._pull_x = ax + dx
         self._pull_y = ay + dy
 
@@ -432,9 +492,32 @@ class Game(GamePlugin):
         self._bird.x = self._pull_x
         self._bird.y = self._pull_y
 
-        # Aim line
-        launch_vx = -(dx / fw) * fw * LAUNCH_SCALE
-        launch_vy = -(dy / fh) * fh * LAUNCH_SCALE
+        # ── Exponential power curve ──────────────────────────────
+        # frac = 0..1 (0 = no pull, 1 = fully pulled to max_px)
+        # power = frac^0.4  — exponential: small pulls still give decent
+        # velocity, full pull = 100% power. The exponent < 1 means the
+        # curve bows upward: you get most of the power before max pull,
+        # so even a modest pull feels responsive.
+        #
+        #   frac  power
+        #   0.10  0.40      (10% pull → 40% power)
+        #   0.25  0.63      (25% pull → 63% power)
+        #   0.50  0.76      (50% pull → 76% power)
+        #   0.75  0.87      (75% pull → 87% power)
+        #   1.00  1.00      (full pull → 100% power)
+        #
+        frac  = dist / max_px if max_px > 0 else 0.0
+        power = frac ** 0.4   # exponent < 1 = curves upward (more power early)
+
+        # Direction unit vector, scaled by power and max launch speed
+        max_launch = fw * LAUNCH_SCALE
+        if dist > 0:
+            nx = -dx / dist
+            ny = -dy / dist
+        else:
+            nx, ny = 0.0, 0.0
+        launch_vx = nx * power * max_launch
+        launch_vy = ny * power * max_launch
         self._draw_aim_arc(frame, self._pull_x, self._pull_y, launch_vx, launch_vy)
 
         self._sling.draw(frame, self._pull_x, self._pull_y)
@@ -518,6 +601,52 @@ class Game(GamePlugin):
             self._reset()
 
     # ── Drawing ───────────────────────────────────────────────
+
+    def _draw_debug(self, frame):
+        """Semi-transparent debug panel showing live hand state and tuning values."""
+        fw, fh = self._fw, self._fh
+        px, py = 8, 50
+        line_h = 20
+        dbg = self._last_dbg
+
+        lines = [
+            f"[D] debug ON",
+            f"state : {self._cur_state.upper()}",
+            f"ratio : {dbg.get('avg_ratio', 0):.3f}  (need >{self._ratio_thresh:.2f})",
+            f"tips  : {dbg.get('extended', '?')}/{self._min_tips} extended",
+            "",
+            f"[+/-] ratio_thresh: {self._ratio_thresh:.2f}",
+            f"[Q/W] min_tips    : {self._min_tips}",
+            f"[A/S] kp_conf     : {self._kp_thresh:.2f}",
+        ]
+
+        # Per-finger ratios
+        ratios = dbg.get('ratios', {})
+        finger_names = {4:'Thumb', 8:'Index', 12:'Mid', 16:'Ring', 20:'Pinky'}
+        for tip_id, name in finger_names.items():
+            r = ratios.get(tip_id)
+            if r is not None:
+                marker = "EXT" if r > self._ratio_thresh else "curl"
+                lines.append(f"  {name}: {r:.2f} {marker}")
+
+        # Background
+        panel_h = len(lines) * line_h + 10
+        ov = frame.copy()
+        cv2.rectangle(ov, (px-4, py-18), (px+200, py+panel_h), (10,8,22), -1)
+        cv2.addWeighted(ov, 0.70, frame, 0.30, 0, frame)
+
+        for i, ln in enumerate(lines):
+            if not ln:
+                continue
+            col = (80, 220, 80) if 'EXT' in ln else                   (80, 80, 220) if 'curl' in ln else                   (200, 220, 255)
+            cv2.putText(frame, ln, (px, py + i*line_h),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0,0,0), 2, cv2.LINE_AA)
+            cv2.putText(frame, ln, (px, py + i*line_h),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, col,   1, cv2.LINE_AA)
+
+        # Colour-coded state badge
+        state_col = (80,220,80) if self._cur_state=='open' else                     (60,60,220) if self._cur_state=='closed' else (100,100,130)
+        cv2.circle(frame, (fw-20, 58), 10, state_col, -1, cv2.LINE_AA)
 
     def _draw_scene(self, frame, now):
         fw, fh = self._fw, self._fh
@@ -637,6 +766,18 @@ class Game(GamePlugin):
         self._bird = Bird(ax, ay - BIRD_R - 5)
 
     # ── Reset ─────────────────────────────────────────────────
+
+    def toggle_debug(self):
+        self._show_debug = not self._show_debug
+
+    def tune(self, key: str):
+        """Called by streamer keyboard hook."""
+        if   key == '+': self._ratio_thresh = round(min(2.5, self._ratio_thresh + 0.05), 2)
+        elif key == '-': self._ratio_thresh = round(max(0.5, self._ratio_thresh - 0.05), 2)
+        elif key == 'q': self._min_tips     = min(5, self._min_tips + 1)
+        elif key == 'w': self._min_tips     = max(1, self._min_tips - 1)
+        elif key == 'a': self._kp_thresh    = round(min(0.9, self._kp_thresh + 0.05), 2)
+        elif key == 's': self._kp_thresh    = round(max(0.05, self._kp_thresh - 0.05), 2)
 
     def _reset(self):
         fw, fh = self._fw, self._fh
