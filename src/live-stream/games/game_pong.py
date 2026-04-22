@@ -403,10 +403,7 @@ class Game(GamePlugin):
         ready_bar(fw // 4,     "P1  LEFT",  p1_held, C_P1)
         ready_bar(3 * fw // 4, "P2  RIGHT", p2_held, C_P2)
 
-        # XY mode hint
-        xy_txt = f"XY mode: {'ON' if self._xy_mode else 'OFF'}  (press X to toggle)"
-        (xw, _), _ = cv2.getTextSize(xy_txt, FONT, 0.5, 1)
-        shadow_text(frame, xy_txt, (fw // 2 - xw // 2, fh - 25), FONT, 0.5, (120, 120, 160))
+
 
     def _handle_ready(self, frame, p1_pos, p2_pos, now):
         # 1-second countdown then play
@@ -622,10 +619,22 @@ class Game(GamePlugin):
         shadow_text(frame, "P2", (fw - 45, 28),   FONT, 0.65, C_P2)
 
     def _draw_xy_toggle_hint(self, frame: np.ndarray):
-        txt = f"XY: {'ON' if self._xy_mode else 'OFF'}"
-        col = C_READY_OK if self._xy_mode else (100, 100, 130)
-        cv2.putText(frame, txt, (self._fw // 2 - 22, self._fh - 8),
-                    FONT_MONO, 0.42, col, 1, cv2.LINE_AA)
+        """XY mode LED indicator — small dot + label in top-centre of screen."""
+        fw = self._fw
+        led_x, led_y = fw // 2, 18
+        if self._xy_mode:
+            # Bright glowing dot
+            ov = frame.copy()
+            cv2.circle(ov, (led_x - 38, led_y), 9, C_READY_OK, -1, cv2.LINE_AA)
+            cv2.addWeighted(ov, 0.5, frame, 0.5, 0, frame)
+            cv2.circle(frame, (led_x - 38, led_y), 6, C_READY_OK, -1, cv2.LINE_AA)
+            cv2.putText(frame, "XY ON", (led_x - 28, led_y + 5),
+                        FONT_MONO, 0.52, C_READY_OK, 1, cv2.LINE_AA)
+        else:
+            # Dim dot
+            cv2.circle(frame, (led_x - 38, led_y), 6, (50, 70, 50), -1, cv2.LINE_AA)
+            cv2.putText(frame, "XY OFF", (led_x - 28, led_y + 5),
+                        FONT_MONO, 0.52, (70, 80, 70), 1, cv2.LINE_AA)
 
     # ── Internal ──────────────────────────────────────────────
 

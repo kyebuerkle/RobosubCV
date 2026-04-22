@@ -603,50 +603,51 @@ class Game(GamePlugin):
     # ── Drawing ───────────────────────────────────────────────
 
     def _draw_debug(self, frame):
-        """Semi-transparent debug panel showing live hand state and tuning values."""
+        """Always-visible power + hand tuning panel — top left."""
         fw, fh = self._fw, self._fh
-        px, py = 8, 50
-        line_h = 20
-        dbg = self._last_dbg
+        dbg    = self._last_dbg
+        px, py = 8, 52
+        lh     = 19
+
+        ax     = self._sling.ax if self._sling else int(fw * SLING_X_FRAC)
+        ay     = self._sling.ay if self._sling else int(fh * SLING_Y_FRAC)
+        max_px = fw * MAX_PULL
+        dist   = math.hypot(self._sx - ax, self._sy - ay)
+        frac   = min(dist / max_px, 1.0) if max_px > 0 else 0.0
+        power  = frac ** 0.4
+        pct    = int(power * 100)
 
         lines = [
-            f"[D] debug ON",
-            f"state : {self._cur_state.upper()}",
-            f"ratio : {dbg.get('avg_ratio', 0):.3f}  (need >{self._ratio_thresh:.2f})",
-            f"tips  : {dbg.get('extended', '?')}/{self._min_tips} extended",
-            "",
-            f"[+/-] ratio_thresh: {self._ratio_thresh:.2f}",
-            f"[Q/W] min_tips    : {self._min_tips}",
-            f"[A/S] kp_conf     : {self._kp_thresh:.2f}",
+            (f"PWR  {pct:3d}%",               (60 + int(195*power), 60 + int(195*(1-power)), 80)),
+            (f"+/-  open ratio : {self._ratio_thresh:.2f}", (180, 180, 220)),
+            (f"Q/W  tips needed: {self._min_tips}",         (180, 180, 220)),
+            (f"A/S  kp conf    : {self._kp_thresh:.2f}",    (180, 180, 220)),
+            (f"D    hide panel",                             (100, 100, 130)),
         ]
 
-        # Per-finger ratios
-        ratios = dbg.get('ratios', {})
-        finger_names = {4:'Thumb', 8:'Index', 12:'Mid', 16:'Ring', 20:'Pinky'}
-        for tip_id, name in finger_names.items():
-            r = ratios.get(tip_id)
-            if r is not None:
-                marker = "EXT" if r > self._ratio_thresh else "curl"
-                lines.append(f"  {name}: {r:.2f} {marker}")
-
-        # Background
-        panel_h = len(lines) * line_h + 10
+        panel_w = 192
+        panel_h = len(lines) * lh + 14
         ov = frame.copy()
-        cv2.rectangle(ov, (px-4, py-18), (px+200, py+panel_h), (10,8,22), -1)
-        cv2.addWeighted(ov, 0.70, frame, 0.30, 0, frame)
+        cv2.rectangle(ov, (px-4, py-20), (px+panel_w, py+panel_h), (8,6,18), -1)
+        cv2.addWeighted(ov, 0.68, frame, 0.32, 0, frame)
 
-        for i, ln in enumerate(lines):
-            if not ln:
-                continue
-            col = (80, 220, 80) if 'EXT' in ln else                   (80, 80, 220) if 'curl' in ln else                   (200, 220, 255)
-            cv2.putText(frame, ln, (px, py + i*line_h),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0,0,0), 2, cv2.LINE_AA)
-            cv2.putText(frame, ln, (px, py + i*line_h),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, col,   1, cv2.LINE_AA)
+        bar_y = py - 10
+        cv2.rectangle(frame, (px, bar_y), (px+panel_w-4, bar_y+6), (30,28,45), -1)
+        bar_filled = int((panel_w-4) * power)
+        if bar_filled > 0:
+            bar_col = (60+int(195*power), 60+int(195*(1-power)), 80)
+            cv2.rectangle(frame, (px, bar_y), (px+bar_filled, bar_y+6), bar_col, -1)
 
-        # Colour-coded state badge
-        state_col = (80,220,80) if self._cur_state=='open' else                     (60,60,220) if self._cur_state=='closed' else (100,100,130)
-        cv2.circle(frame, (fw-20, 58), 10, state_col, -1, cv2.LINE_AA)
+        for i, (txt, col) in enumerate(lines):
+            y = py + i * lh
+            cv2.putText(frame, txt, (px+1, y+1), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        (0,0,0), 2, cv2.LINE_AA)
+            cv2.putText(frame, txt, (px,   y  ), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        col, 1, cv2.LINE_AA)
+
+        state_col = (80,220,80) if self._cur_state=='open' else \
+                    (60,60,220) if self._cur_state=='closed' else (60,60,80)
+        cv2.circle(frame, (px + panel_w - 10, py - 13), 6, state_col, -1, cv2.LINE_AA)
 
     def _draw_scene(self, frame, now):
         fw, fh = self._fw, self._fh
