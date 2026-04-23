@@ -2,38 +2,79 @@
 """
 game_bounce.py — Multi-Ball Hand Bounce
 -----------------------------------------
-  A / D        : add / remove a ball
-  Open hand    : slap balls with keypoints (fingertips hit individually)
-  Closed fist  : catch / hold any ball — open hand to release
-  SPACE        : pause
+  A / D    : add / remove a ball
+  SPACE    : pause
 
-Physics
--------
-  Keypoint-based hitting: each visible fingertip/knuckle is its own
-  collision point. Moving points impart velocity; stationary ones just
-  reflect.
+Controls
+--------
+  Open hand   : slap balls — fingertips/DIP joints are individual hit points.
+                Moving points add speed; stationary ones just reflect.
+  Closed fist : catch a slow-moving ball (stationary fist),
+                OR punch it (moving fist reflects + adds fist speed).
 
-  Fist detection uses a majority-vote window — needs > half the recent
-  frames to agree before state flips. Same for hand movement — only
-  counts as "moving" if displacement is consistently above a threshold.
-
-  Ball-ball elastic collision preserves momentum exactly.
+Charge explosion
+----------------
+  Hold a fist closed for CHARGE_TIER_SEC seconds → a circle timer appears.
+  Each additional CHARGE_TIER_SEC grows the charge level (shown as rings).
+  Opening the hand releases an explosion that blasts all nearby balls outward.
+  Force and radius scale with charge level.
 """
 
 from __future__ import annotations
-
-import math
-import random
-import time
+import math, random, time
 from collections import deque
-
-import cv2
-import numpy as np
-
+import cv2, numpy as np
 from game_plugin import GamePlugin
 
 
-# ── Helpers ───────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  ── TUNABLE CONSTANTS ── edit these to adjust gameplay ──────
+# ═══════════════════════════════════════════════════════════════
+
+# ── Ball ──────────────────────────────────────────────────────
+BALL_RADIUS        = 22      # px — radius of each ball
+BALL_FRICTION      = 0.990   # velocity multiplier per frame  (< 1 = slows down)
+BALL_MIN_SPEED     = 80      # px/s — balls never fully stop
+BALL_MAX_SPEED     = 1600    # px/s — hard speed cap
+BALL_SPAWN_SPEED   = (220, 480)   # (min, max) px/s on spawn
+
+MAX_BALLS          = 8       # maximum balls at once
+
+# ── Hand / keypoint detection ─────────────────────────────────
+KP_CONF_THRESH     = 0.18    # min keypoint confidence to use a point
+FIST_SPREAD_RATIO  = 1.45    # keypoint spread / hand-size below this = fist
+                             # lower = harder to trigger fist
+FIST_VOTE_WINDOW   = 6       # frames majority-voted for fist state
+MOVE_VOTE_WINDOW   = 5       # frames majority-voted for "is moving"
+MOVE_PX_THRESH     = 5.0     # px/frame displacement below = stationary
+
+# ── Hit physics ───────────────────────────────────────────────
+KP_HIT_RADIUS      = 28      # px — each keypoint's hit zone radius
+CATCH_RADIUS       = 48      # px — fist catch zone (from palm centre)
+CATCH_SPEED_LIMIT  = 200     # px/s — palm must be slower than this to catch
+HIT_COOLDOWN       = 0.05    # s  — min time between hits on same ball / same kp
+MOVE_IMPULSE_MIN   = 80      # px/s — hand speed below this adds no energy
+MOVE_IMPULSE_MAX   = 1800    # px/s — hand speed that gives maximum energy add
+SWEEP_MIN_SPEED    = 80      # px/s — keypoint speed to enable sweep detection
+
+# ── Charge explosion ──────────────────────────────────────────
+CHARGE_TIER_SEC    = 5.0     # seconds per charge tier
+CHARGE_MAX_TIERS   = 4       # maximum charge levels
+CHARGE_BASE_FORCE  = 700     # px/s added to each ball at tier 1
+CHARGE_FORCE_SCALE = 1.6     # multiplier per additional tier
+CHARGE_BASE_RADIUS = 140     # px — explosion radius at tier 1
+CHARGE_RADIUS_GROW = 80      # px added per tier
+CHARGE_TIMER_THICK = 8       # px — arc thickness for circle timer
+
+# ── Visual ────────────────────────────────────────────────────
+TRAIL_LEN          = 14      # ball trail length in frames
+FLASH_DUR          = 0.09    # s — ball flash on hit
+BALL_COLOURS = [
+    (255, 220,  40), (100, 220, 255), (255, 100, 160),
+    (80,  255, 140), (255, 160,  60), (180, 120, 255),
+]
+
+# ═══════════════════════════════════════════════════════════════
 
 def _clamp(v, lo, hi): return max(lo, min(hi, v))
 def _lerp(a, b, t):    return a + (b - a) * t
@@ -41,290 +82,204 @@ def _lerp(a, b, t):    return a + (b - a) * t
 FONT  = cv2.FONT_HERSHEY_DUPLEX
 FONTS = cv2.FONT_HERSHEY_SIMPLEX
 
-# 21-pt hand keypoint indices used for hitting
-# Fingertips and mid-finger joints — the parts that actually stick out
-HIT_KP_IDS   = [4, 8, 12, 16, 20,    # fingertips
-                 3, 7, 11, 15, 19]    # DIP joints (second-to-tip)
-WRIST_ID     = 0
-TIP_IDS      = [4, 8, 12, 16, 20]
-KNUCKLE_IDS  = [1, 5,  9, 13, 17]
+HIT_KP_IDS  = [4, 8, 12, 16, 20, 3, 7, 11, 15, 19]  # fingertips + DIP
+WRIST_ID    = 0
 
 
 # ── Fist detection ────────────────────────────────────────────
 
-def _raw_is_fist(inst, thresh=0.18) -> bool:
-    """
-    Fist detection based on keypoint spread relative to hand size.
-
-    Open hand: fingertips are spread far from the palm centre.
-    Closed fist: all keypoints cluster tightly — the bounding box
-    of confident keypoints is small relative to the wrist-to-middle-
-    knuckle distance (which stays roughly constant regardless of pose).
-
-    This is more robust than tip/knuckle ratios on low-confidence models
-    because it only needs the *overall pattern* of points, not specific tips.
-    """
+def _raw_is_fist(inst) -> bool:
+    """Spread-based fist check. True = closed / insufficient data."""
     if not inst or len(inst) < 21:
         return True
-
-    good = [(x, y) for x, y, c in inst if c > thresh]
+    good = [(x, y) for x, y, c in inst if c > KP_CONF_THRESH]
     if len(good) < 5:
-        return True   # too few visible points — assume closed
-
-    # Hand size reference: wrist (0) → middle MCP (9)
+        return True
     wx, wy = inst[0][0], inst[0][1]
     mx, my = inst[9][0], inst[9][1]
     ref = math.hypot(mx - wx, my - wy)
     if ref < 1:
         return True
+    max_dist = max(
+        (math.hypot(good[i][0]-good[j][0], good[i][1]-good[j][1])
+         for i in range(len(good)) for j in range(i+1, len(good))),
+        default=0.0)
+    return (max_dist / ref) < FIST_SPREAD_RATIO
 
-    # Spread = max distance between any two confident keypoints
-    max_dist = 0.0
-    for i in range(len(good)):
-        for j in range(i + 1, len(good)):
-            d = math.hypot(good[i][0]-good[j][0], good[i][1]-good[j][1])
-            if d > max_dist:
-                max_dist = d
 
-    # Normalised spread: open hand ≈ 1.8-2.5×, fist ≈ 0.8-1.2×
-    ratio = max_dist / ref
-    return ratio < 1.45   # below this = fist
+# ── Sweep detection ───────────────────────────────────────────
+
+def _segment_ball_intersect(px, py, cx, cy, bx, by, r):
+    dx = cx-px; dy = cy-py
+    fx = px-bx; fy = py-by
+    a = dx*dx + dy*dy
+    if a < 1e-6: return None
+    b = 2*(fx*dx + fy*dy)
+    c = fx*fx + fy*fy - r*r
+    disc = b*b - 4*a*c
+    if disc < 0: return None
+    sq = math.sqrt(disc)
+    for t in ((-b-sq)/(2*a), (-b+sq)/(2*a)):
+        if 0.0 <= t <= 1.0:
+            return px+t*dx, py+t*dy, t
+    return None
 
 
 # ── Keypoint tracker ──────────────────────────────────────────
 
 class KPTracker:
-    """
-    Tracks a single keypoint across frames.
-    Smooths position and velocity.
-    Provides majority-vote 'moving' state.
-    """
-    MOVE_THRESH   = 5.0      # px/frame — below this = stationary
-    VOTE_WINDOW   = 5        # frames for majority vote
-
-    def __init__(self, x: float, y: float):
-        self.x  = x;  self.y  = y
-        self.px = x;  self.py = y
+    def __init__(self, x, y):
+        self.x = x; self.y = y
+        self.px = x; self.py = y
         self.vx = 0.0; self.vy = 0.0
-        self._move_votes: deque[bool] = deque(maxlen=self.VOTE_WINDOW)
+        self._votes: deque[bool] = deque(maxlen=MOVE_VOTE_WINDOW)
         self.moving = False
 
-    def update(self, x: float, y: float, dt: float):
+    def update(self, x, y, dt):
         self.px, self.py = self.x, self.y
-        alpha = _clamp(0.35 + dt * 4, 0, 1)
+        alpha = _clamp(0.35 + dt*4, 0, 1)
         self.x = _lerp(self.x, x, alpha)
         self.y = _lerp(self.y, y, alpha)
-        raw_vx = (self.x - self.px) / max(dt, 1e-4)
-        raw_vy = (self.y - self.py) / max(dt, 1e-4)
-        self.vx = _lerp(self.vx, raw_vx, 0.40)
-        self.vy = _lerp(self.vy, raw_vy, 0.40)
-        pixel_disp = math.hypot(self.x - self.px, self.y - self.py)
-        self._move_votes.append(pixel_disp > self.MOVE_THRESH)
-        # Majority vote
-        self.moving = sum(self._move_votes) > len(self._move_votes) / 2
+        self.vx = _lerp(self.vx, (self.x-self.px)/max(dt,1e-4), 0.40)
+        self.vy = _lerp(self.vy, (self.y-self.py)/max(dt,1e-4), 0.40)
+        self._votes.append(math.hypot(self.x-self.px, self.y-self.py) > MOVE_PX_THRESH)
+        self.moving = sum(self._votes) > len(self._votes)/2
 
     @property
-    def speed(self) -> float:
-        return math.hypot(self.vx, self.vy)
-
-
-# ── Sweep / tunneling detection ──────────────────────────────
-
-def _segment_ball_intersect(
-    px: float, py: float,   # keypoint prev position
-    cx: float, cy: float,   # keypoint current position
-    bx: float, by: float,   # ball centre
-    r:  float,              # ball radius + kp hit radius
-) -> tuple[float, float, float] | None:
-    """
-    Return (hit_x, hit_y, t) if the segment p→c passes within r of the ball,
-    where t is the parametric position along the segment (0=start, 1=end).
-    Used to catch fast-moving keypoints that tunnel through the ball between frames.
-    Returns None if no intersection.
-    """
-    dx = cx - px;  dy = cy - py
-    fx = px - bx;  fy = py - by
-    a = dx*dx + dy*dy
-    if a < 1e-6:
-        return None
-    b = 2 * (fx*dx + fy*dy)
-    c_coef = fx*fx + fy*fy - r*r
-    disc = b*b - 4*a*c_coef
-    if disc < 0:
-        return None
-    disc_r = math.sqrt(disc)
-    t1 = (-b - disc_r) / (2*a)
-    t2 = (-b + disc_r) / (2*a)
-    # Pick the entry point that lies within the segment
-    for t in (t1, t2):
-        if 0.0 <= t <= 1.0:
-            hx = px + t*dx;  hy = py + t*dy
-            return hx, hy, t
-    return None
+    def speed(self): return math.hypot(self.vx, self.vy)
 
 
 # ── Hand tracker ─────────────────────────────────────────────
 
 class Hand:
-    """
-    Tracks one hand. Maintains:
-      - per-keypoint KPTracker objects
-      - majority-vote fist state
-      - per-ball hit cooldowns
-    """
-    FIST_WINDOW  = 6     # frames for fist majority vote
-    HIT_COOL     = 0.05  # seconds between hits — ~every other frame at 30fps
-    CATCH_RAD    = 48    # px — fist catch radius (from wrist/palm centre)
-    KP_HIT_RAD   = 28    # px — per-keypoint hit radius
-
     def __init__(self):
-        self.active  = False
-        self.closed  = False          # majority-voted fist state
-        self.cx = 0.0; self.cy = 0.0  # hand centre (wrist or centroid)
+        self.active = False
+        self.closed = False
+        self.cx = 0.0; self.cy = 0.0
         self._prev_cx = 0.0; self._prev_cy = 0.0
-        self.kps: dict[int, KPTracker] = {}   # kid → tracker
-        self._fist_votes: deque[bool] = deque(maxlen=self.FIST_WINDOW)
-        self._cool: dict[tuple, float] = {}   # (ball_id, kp_id) → timestamp
+        self.kps: dict[int, KPTracker] = {}
+        self._fist_votes: deque[bool] = deque(maxlen=FIST_VOTE_WINDOW)
+        self._cool: dict[tuple, float] = {}
+        # Charge state
+        self.fist_since: float | None = None   # when fist started
+        self.charge_tier: int = 0              # current tier
 
-    def update(self, inst: list, dt: float, now: float):
-        raw_fist = _raw_is_fist(inst)
-        self._fist_votes.append(raw_fist)
-        self.closed = sum(self._fist_votes) > len(self._fist_votes) / 2
+    def update(self, inst, dt, now):
+        self._fist_votes.append(_raw_is_fist(inst))
+        was_closed = self.closed
+        self.closed = sum(self._fist_votes) > len(self._fist_votes)/2
 
-        # Store prev palm position for speed check in catch
-        self._prev_cx = self.cx
-        self._prev_cy = self.cy
-
-        # Hand centre from wrist or centroid
-        good = [(x, y, c) for x, y, c in inst if c > 0.20]
+        self._prev_cx, self._prev_cy = self.cx, self.cy
+        good = [(x,y,c) for x,y,c in inst if c > KP_CONF_THRESH]
         if good:
-            self.cx = sum(p[0] for p in good) / len(good)
-            self.cy = sum(p[1] for p in good) / len(good)
+            self.cx = sum(p[0] for p in good)/len(good)
+            self.cy = sum(p[1] for p in good)/len(good)
 
-        # Update keypoint trackers for hit points
         for kid in HIT_KP_IDS:
-            if kid >= len(inst):
-                continue
+            if kid >= len(inst): continue
             x, y, conf = inst[kid]
-            if conf < 0.22:
-                continue
+            if conf < KP_CONF_THRESH + 0.04: continue
             if kid not in self.kps:
                 self.kps[kid] = KPTracker(x, y)
             else:
                 self.kps[kid].update(x, y, dt)
 
-        # Expire old cooldowns
-        self._cool = {k: t for k, t in self._cool.items()
-                      if now - t < self.HIT_COOL}
+        # Track fist hold time for charge
+        if self.closed:
+            if self.fist_since is None:
+                self.fist_since = now
+            held = now - self.fist_since
+            self.charge_tier = min(int(held / CHARGE_TIER_SEC), CHARGE_MAX_TIERS)
+        else:
+            self.fist_since = None
+            self.charge_tier = 0
+
+        self._cool = {k:t for k,t in self._cool.items()
+                      if now-t < HIT_COOLDOWN}
         self.active = True
 
-    def can_hit(self, ball_id: int, kp_id: int, now: float) -> bool:
-        return now - self._cool.get((ball_id, kp_id), -999) >= self.HIT_COOL
+    @property
+    def palm_speed(self):
+        return math.hypot(self.cx-self._prev_cx, self.cy-self._prev_cy)
 
-    def mark_hit(self, ball_id: int, kp_id: int, now: float):
-        self._cool[(ball_id, kp_id)] = now
+    def can_hit(self, bid, kid, now):
+        return now - self._cool.get((bid,kid),-999) >= HIT_COOLDOWN
+
+    def mark_hit(self, bid, kid, now):
+        self._cool[(bid,kid)] = now
 
 
 # ── Ball ─────────────────────────────────────────────────────
 
 class Ball:
-    RADIUS    = 22
-    FRICTION  = 0.990
-    MIN_SPEED = 80
-    MAX_SPEED = 1600
-
-    COLOURS = [
-        (255, 220,  40), (100, 220, 255), (255, 100, 160),
-        (80,  255, 140), (255, 160,  60), (180, 120, 255),
-    ]
     _cidx = 0
-
-    def __init__(self, fw: int, fh: int):
-        cx, cy = fw / 2, fh / 2
-        self.x = cx + random.uniform(-cx * 0.4, cx * 0.4)
-        self.y = cy + random.uniform(-cy * 0.4, cy * 0.4)
-        ang    = random.uniform(0, 2 * math.pi)
-        spd    = random.uniform(220, 480)
-        self.vx = math.cos(ang) * spd
-        self.vy = math.sin(ang) * spd
-        self.r  = self.RADIUS
-        self.colour  = self.COLOURS[Ball._cidx % len(self.COLOURS)]
-        Ball._cidx  += 1
-        self.trail:  list[tuple[float, float]] = []
+    def __init__(self, fw, fh):
+        cx, cy = fw/2, fh/2
+        self.x = cx + random.uniform(-cx*0.4, cx*0.4)
+        self.y = cy + random.uniform(-cy*0.4, cy*0.4)
+        ang = random.uniform(0, 2*math.pi)
+        spd = random.uniform(*BALL_SPAWN_SPEED)
+        self.vx = math.cos(ang)*spd; self.vy = math.sin(ang)*spd
+        self.r = BALL_RADIUS
+        self.colour = BALL_COLOURS[Ball._cidx % len(BALL_COLOURS)]
+        Ball._cidx += 1
+        self.trail: list = []
         self.flash_t = -99.0
-        self.caught  = False
+        self.caught = False
         self.catch_off = (0.0, 0.0)
 
-    def update(self, dt: float, fw: int, fh: int):
-        if self.caught:
-            return
+    def update(self, dt, fw, fh):
+        if self.caught: return
         self.trail.append((self.x, self.y))
-        if len(self.trail) > 14:
-            self.trail.pop(0)
-
-        self.vx *= self.FRICTION
-        self.vy *= self.FRICTION
+        if len(self.trail) > TRAIL_LEN: self.trail.pop(0)
+        self.vx *= BALL_FRICTION; self.vy *= BALL_FRICTION
         spd = math.hypot(self.vx, self.vy)
-        if spd < self.MIN_SPEED:
+        if spd < BALL_MIN_SPEED:
             if spd < 1e-3:
-                ang = random.uniform(0, 2 * math.pi)
-                self.vx = math.cos(ang) * self.MIN_SPEED
-                self.vy = math.sin(ang) * self.MIN_SPEED
+                ang = random.uniform(0, 2*math.pi)
+                self.vx = math.cos(ang)*BALL_MIN_SPEED
+                self.vy = math.sin(ang)*BALL_MIN_SPEED
             else:
-                self.vx = self.vx / spd * self.MIN_SPEED
-                self.vy = self.vy / spd * self.MIN_SPEED
+                self.vx = self.vx/spd*BALL_MIN_SPEED
+                self.vy = self.vy/spd*BALL_MIN_SPEED
+        self.x += self.vx*dt; self.y += self.vy*dt
+        if self.x-self.r < 0:   self.x=float(self.r);     self.vx= abs(self.vx)
+        if self.x+self.r > fw:  self.x=float(fw-self.r);  self.vx=-abs(self.vx)
+        if self.y-self.r < 0:   self.y=float(self.r);     self.vy= abs(self.vy)
+        if self.y+self.r > fh:  self.y=float(fh-self.r);  self.vy=-abs(self.vy)
 
-        self.x += self.vx * dt;  self.y += self.vy * dt
-
-        if self.x - self.r < 0:
-            self.x = float(self.r);     self.vx =  abs(self.vx)
-        if self.x + self.r > fw:
-            self.x = float(fw - self.r); self.vx = -abs(self.vx)
-        if self.y - self.r < 0:
-            self.y = float(self.r);     self.vy =  abs(self.vy)
-        if self.y + self.r > fh:
-            self.y = float(fh - self.r); self.vy = -abs(self.vy)
-
-    def draw(self, frame: np.ndarray, now: float):
-        bx, by = int(self.x), int(self.y)
-        r = self.r
-        for i, (tx, ty) in enumerate(self.trail):
-            a  = (i / max(len(self.trail)-1, 1)) * 0.45
-            tr = max(2, int(r * (i / max(len(self.trail)-1, 1)) * 0.65))
+    def draw(self, frame, now):
+        bx, by, r = int(self.x), int(self.y), self.r
+        for i,(tx,ty) in enumerate(self.trail):
+            a  = (i/max(len(self.trail)-1,1))*0.45
+            tr = max(2, int(r*(i/max(len(self.trail)-1,1))*0.65))
             ov = frame.copy()
-            cv2.circle(ov, (int(tx), int(ty)), tr, self.colour, -1, cv2.LINE_AA)
-            cv2.addWeighted(ov, a*0.5, frame, 1-a*0.5, 0, frame)
-
-        flash = (now - self.flash_t) < 0.09
+            cv2.circle(ov,(int(tx),int(ty)),tr,self.colour,-1,cv2.LINE_AA)
+            cv2.addWeighted(ov,a*0.5,frame,1-a*0.5,0,frame)
+        flash = (now-self.flash_t) < FLASH_DUR
         gcol  = (255,255,255) if flash else tuple(min(255,c+80) for c in self.colour)
         ov = frame.copy()
-        cv2.circle(ov, (bx,by), r+8 if flash else r+5, gcol, -1, cv2.LINE_AA)
-        cv2.addWeighted(ov, 0.28, frame, 0.72, 0, frame)
-        cv2.circle(frame, (bx,by), r, (220,240,255) if flash else self.colour, -1, cv2.LINE_AA)
-        cv2.circle(frame, (bx-r//3, by-r//3), max(3,r//4), (255,255,255), -1, cv2.LINE_AA)
+        cv2.circle(ov,(bx,by),r+8 if flash else r+5,gcol,-1,cv2.LINE_AA)
+        cv2.addWeighted(ov,0.28,frame,0.72,0,frame)
+        cv2.circle(frame,(bx,by),r,(220,240,255) if flash else self.colour,-1,cv2.LINE_AA)
+        cv2.circle(frame,(bx-r//3,by-r//3),max(3,r//4),(255,255,255),-1,cv2.LINE_AA)
         if self.caught:
-            cv2.circle(frame, (bx,by), r+4, (255,255,255), 1, cv2.LINE_AA)
+            cv2.circle(frame,(bx,by),r+4,(255,255,255),1,cv2.LINE_AA)
 
 
 # ── Game ─────────────────────────────────────────────────────
 
 class Game(GamePlugin):
 
-    MAX_BALLS    = 8
-    # Hand speed thresholds for impulse scaling
-    MOVE_PX_S    = 80     # px/s — below this = treat as stationary (no energy add)
-    MAX_IMPULSE  = 1800   # px/s — hand speed that gives maximum energy transfer
-
     def __init__(self):
         super().__init__()
-        self._fw = 640;  self._fh = 480
+        self._fw = 640; self._fh = 480
         self._balls: list[Ball] = []
         self._hands = [Hand(), Hand()]
         self._score = 0
         self._t_last = time.perf_counter()
         self._started = False
-
-    # ── API ───────────────────────────────────────────────────
+        self._explosions: list[dict] = []   # for visual effects
 
     def on_start(self, fw, fh, class_names=None):
         self._fw, self._fh = fw, fh
@@ -334,14 +289,13 @@ class Game(GamePlugin):
         self._started = True
 
     def on_frame(self, frame, keypoints, detections, fw, fh):
-        if not self._started:
-            self.on_start(fw, fh)
+        if not self._started: self.on_start(fw, fh)
         now = time.perf_counter()
-        dt  = min(now - self._t_last, 0.07)
+        dt  = min(now-self._t_last, 0.07)
         self._t_last = now
         self._fw, self._fh = fw, fh
 
-        # ── Update hand trackers ──────────────────────────────
+        # ── Update hands ──────────────────────────────────────
         active_hands: list[Hand] = []
         for i, inst in enumerate(keypoints[:2]):
             if inst:
@@ -349,228 +303,260 @@ class Game(GamePlugin):
                 active_hands.append(self._hands[i])
             else:
                 self._hands[i].active = False
-
-        # Fallback: detection boxes
         if not active_hands:
-            for j, (label, conf, x1, y1, x2, y2) in enumerate(detections[:2]):
+            for j,(label,conf,x1,y1,x2,y2) in enumerate(detections[:2]):
                 if conf > 0.25:
-                    fake_inst = [(((x1+x2)/2), ((y1+y2)/2), 0.1)] * 21
-                    self._hands[j].update(fake_inst, dt, now)
-                    self._hands[j].closed = True   # box only = fist
+                    fake = [(((x1+x2)/2),((y1+y2)/2),0.1)]*21
+                    self._hands[j].update(fake, dt, now)
+                    self._hands[j].closed = True
                     active_hands.append(self._hands[j])
+
+        # ── Check for charge release (fist→open) ──────────────
+        for h in active_hands:
+            if not h.closed and h.charge_tier > 0:
+                # Hand just opened — release explosion
+                tier = h.charge_tier
+                force  = CHARGE_BASE_FORCE * (CHARGE_FORCE_SCALE ** (tier-1))
+                radius = CHARGE_BASE_RADIUS + CHARGE_RADIUS_GROW * (tier-1)
+                self._explode(h.cx, h.cy, force, radius, now)
+                # Visual ring
+                self._explosions.append({
+                    'x': h.cx, 'y': h.cy, 'r': radius,
+                    'tier': tier, 'ts': now, 'dur': 0.5
+                })
 
         # ── Ball-hand interaction ─────────────────────────────
         for ball in self._balls:
             bid = id(ball)
 
             if ball.caught:
-                # Find holding hand (by proximity to centre)
-                holder = None
-                for h in active_hands:
-                    if math.hypot(ball.x - h.cx, ball.y - h.cy) < Hand.CATCH_RAD + Ball.RADIUS + 15:
-                        holder = h
-                        break
-                # Release if hand opened or moved away
+                holder = next(
+                    (h for h in active_hands
+                     if math.hypot(ball.x-h.cx,ball.y-h.cy) < CATCH_RADIUS+ball.r+15),
+                    None)
                 if holder is None or not holder.closed:
                     ball.caught = False
-                    if holder:
-                        # Release with hand velocity from wrist tracker if available
-                        if WRIST_ID in holder.kps:
-                            kp = holder.kps[WRIST_ID]
-                            ball.vx = kp.vx;  ball.vy = kp.vy
-                        spd = math.hypot(ball.vx, ball.vy)
-                        if spd < Ball.MIN_SPEED:
-                            ang = math.atan2(ball.vy, ball.vx)
-                            ball.vx = math.cos(ang) * Ball.MIN_SPEED
-                            ball.vy = math.sin(ang) * Ball.MIN_SPEED
+                    if holder and WRIST_ID in holder.kps:
+                        kp = holder.kps[WRIST_ID]
+                        ball.vx, ball.vy = kp.vx, kp.vy
+                    spd = math.hypot(ball.vx, ball.vy)
+                    if spd < BALL_MIN_SPEED:
+                        ang = math.atan2(ball.vy, ball.vx)
+                        ball.vx = math.cos(ang)*BALL_MIN_SPEED
+                        ball.vy = math.sin(ang)*BALL_MIN_SPEED
                 else:
                     ball.x = holder.cx + ball.catch_off[0]
                     ball.y = holder.cy + ball.catch_off[1]
                 continue
 
             for h in active_hands:
-                # ── Fist catch: closed AND hand moving slowly ────
                 if h.closed:
-                    dist = math.hypot(ball.x - h.cx, ball.y - h.cy)
-                    # Only catch if palm is close AND hand is not sweeping fast
-                    palm_speed = math.hypot(
-                        h.cx - h._prev_cx, h.cy - h._prev_cy) / max(dt, 1e-4)
-                    slow_enough = palm_speed < 200   # px/s threshold to catch
-                    if dist < Hand.CATCH_RAD + Ball.RADIUS and slow_enough                             and h.can_hit(bid, -1, now):
-                        ball.caught = True
-                        ball.catch_off = (ball.x - h.cx, ball.y - h.cy)
-                        ball.vx = 0.0;  ball.vy = 0.0
-                        ball.flash_t = now
-                        h.mark_hit(bid, -1, now)
-                        self._score += 1
-                    elif h.closed and not slow_enough:
-                        # Moving fist = solid object — reflect ball off it
-                        if dist < Hand.CATCH_RAD + Ball.RADIUS and h.can_hit(bid, -1, now):
-                            if dist < 1: nx, ny = 1.0, 0.0
-                            else:
-                                nx = (ball.x - h.cx) / dist
-                                ny = (ball.y - h.cy) / dist
-                            dot = ball.vx*nx + ball.vy*ny
-                            ball.vx -= 2*dot*nx;  ball.vy -= 2*dot*ny
-                            # Add fist velocity
-                            ball.vx += nx * palm_speed * 0.6
-                            ball.vy += ny * palm_speed * 0.6
-                            spd = math.hypot(ball.vx, ball.vy)
-                            if spd > Ball.MAX_SPEED:
-                                ball.vx = ball.vx/spd*Ball.MAX_SPEED
-                                ball.vy = ball.vy/spd*Ball.MAX_SPEED
-                            overlap = (Hand.CATCH_RAD+Ball.RADIUS) - dist + 2
-                            ball.x += nx*overlap;  ball.y += ny*overlap
-                            h.mark_hit(bid, -1, now)
+                    dist = math.hypot(ball.x-h.cx, ball.y-h.cy)
+                    ps   = h.palm_speed / max(dt, 1e-4)
+                    if dist < CATCH_RADIUS + ball.r:
+                        if ps < CATCH_SPEED_LIMIT and h.can_hit(bid,-1,now):
+                            # Catch
+                            ball.caught = True
+                            ball.catch_off = (ball.x-h.cx, ball.y-h.cy)
+                            ball.vx = 0.0; ball.vy = 0.0
                             ball.flash_t = now
-                    continue   # fist never slaps via keypoints
+                            h.mark_hit(bid,-1,now)
+                            self._score += 1
+                        elif ps >= CATCH_SPEED_LIMIT and h.can_hit(bid,-1,now):
+                            # Punch
+                            if dist < 1: nx,ny = 1.0,0.0
+                            else:        nx,ny = (ball.x-h.cx)/dist,(ball.y-h.cy)/dist
+                            dot = ball.vx*nx+ball.vy*ny
+                            ball.vx -= 2*dot*nx; ball.vy -= 2*dot*ny
+                            ball.vx += nx*ps*0.6; ball.vy += ny*ps*0.6
+                            spd = math.hypot(ball.vx,ball.vy)
+                            if spd > BALL_MAX_SPEED:
+                                ball.vx=ball.vx/spd*BALL_MAX_SPEED
+                                ball.vy=ball.vy/spd*BALL_MAX_SPEED
+                            ol = CATCH_RADIUS+ball.r - dist + 2
+                            ball.x += nx*ol; ball.y += ny*ol
+                            h.mark_hit(bid,-1,now)
+                            ball.flash_t = now
+                    continue
 
-                # ── Open hand: per-keypoint hits ─────────────
+                # Open hand — per-keypoint hits
                 for kid, kp in h.kps.items():
-                    contact = Hand.KP_HIT_RAD + Ball.RADIUS
-                    if not h.can_hit(bid, kid, now):
-                        continue
+                    contact = KP_HIT_RADIUS + ball.r
+                    if not h.can_hit(bid,kid,now): continue
+                    dist = math.hypot(ball.x-kp.x, ball.y-kp.y)
+                    sweep = None
+                    if kp.speed > SWEEP_MIN_SPEED and dist < contact*3:
+                        sweep = _segment_ball_intersect(
+                            kp.px,kp.py,kp.x,kp.y,ball.x,ball.y,float(contact))
+                    if dist > contact and sweep is None: continue
 
-                    dist = math.hypot(ball.x - kp.x, ball.y - kp.y)
+                    if sweep:
+                        hx,hy,_ = sweep
+                        ddx,ddy = ball.x-hx, ball.y-hy
+                        dn = math.hypot(ddx,ddy)
+                        nx,ny = (ddx/dn,ddy/dn) if dn>1 else (1.0,0.0)
+                    elif dist<1: nx,ny=1.0,0.0
+                    else: nx,ny=(ball.x-kp.x)/dist,(ball.y-kp.y)/dist
 
-                    # ── Sweep / tunnel detection ──────────────
-                    # Check if the keypoint path from last frame to this frame
-                    # swept through the ball — catches fast hands that jump over it.
-                    sweep_hit = None
-                    kp_speed = kp.speed
-                    if kp_speed > 80 and dist < contact * 3:
-                        sweep_hit = _segment_ball_intersect(
-                            kp.px, kp.py, kp.x, kp.y,
-                            ball.x, ball.y, float(contact))
+                    dot = ball.vx*nx+ball.vy*ny
+                    ball.vx -= 2*dot*nx; ball.vy -= 2*dot*ny
 
-                    hit_this_kp = (dist <= contact) or (sweep_hit is not None)
-                    if not hit_this_kp:
-                        continue
-
-                    # Contact point and normal
-                    if sweep_hit is not None:
-                        # Use the sweep entry point for the normal
-                        hx, hy, _ = sweep_hit
-                        ddx = ball.x - hx;  ddy = ball.y - hy
-                        dn = math.hypot(ddx, ddy)
-                        if dn < 1: nx, ny = 1.0, 0.0
-                        else:      nx, ny = ddx/dn, ddy/dn
-                    elif dist < 1:
-                        nx, ny = 1.0, 0.0
-                    else:
-                        nx = (ball.x - kp.x) / dist
-                        ny = (ball.y - kp.y) / dist
-
-                    # Reflect ball velocity off the keypoint surface
-                    dot = ball.vx*nx + ball.vy*ny
-                    ball.vx -= 2*dot*nx
-                    ball.vy -= 2*dot*ny
-
-                    # Add energy: proportional to how fast the keypoint is
-                    # moving INTO the ball (along normal), above the dead zone.
-                    hand_dot = kp.vx*nx + kp.vy*ny   # neg = kp moving toward ball
-                    if hand_dot < -self.MOVE_PX_S:
+                    hand_dot = kp.vx*nx+kp.vy*ny
+                    if hand_dot < -MOVE_IMPULSE_MIN:
                         contrib = abs(hand_dot)
-                        t_scale = _clamp(
-                            (contrib - self.MOVE_PX_S) /
-                            max(self.MAX_IMPULSE - self.MOVE_PX_S, 1),
-                            0.0, 1.0)
-                        energy = contrib * t_scale
-                        ball.vx += nx * energy
-                        ball.vy += ny * energy
+                        ts = _clamp((contrib-MOVE_IMPULSE_MIN)/max(MOVE_IMPULSE_MAX-MOVE_IMPULSE_MIN,1),0,1)
+                        ball.vx += nx*contrib*ts; ball.vy += ny*contrib*ts
 
-                    # For sweep hits boost by the actual travelled distance
-                    # to account for the speed lost by slow inference
-                    if sweep_hit is not None:
-                        travel_spd = kp_speed
-                        if travel_spd > self.MOVE_PX_S:
-                            t_scale = _clamp(
-                                (travel_spd - self.MOVE_PX_S) /
-                                max(self.MAX_IMPULSE - self.MOVE_PX_S, 1),
-                                0.0, 1.0)
-                            ball.vx += nx * travel_spd * t_scale * 0.7
-                            ball.vy += ny * travel_spd * t_scale * 0.7
+                    if sweep:
+                        ts = _clamp((kp.speed-MOVE_IMPULSE_MIN)/max(MOVE_IMPULSE_MAX-MOVE_IMPULSE_MIN,1),0,1)
+                        ball.vx += nx*kp.speed*ts*0.7; ball.vy += ny*kp.speed*ts*0.7
 
-                    # Cap speed
-                    spd = math.hypot(ball.vx, ball.vy)
-                    if spd > Ball.MAX_SPEED:
-                        ball.vx = ball.vx/spd*Ball.MAX_SPEED
-                        ball.vy = ball.vy/spd*Ball.MAX_SPEED
-
-                    # Push ball out of contact zone
+                    spd = math.hypot(ball.vx,ball.vy)
+                    if spd > BALL_MAX_SPEED:
+                        ball.vx=ball.vx/spd*BALL_MAX_SPEED
+                        ball.vy=ball.vy/spd*BALL_MAX_SPEED
                     if dist < contact:
-                        overlap = contact - dist + 2
-                        ball.x += nx*overlap;  ball.y += ny*overlap
+                        ol = contact-dist+2; ball.x+=nx*ol; ball.y+=ny*ol
+                    h.mark_hit(bid,kid,now); ball.flash_t=now; self._score+=1
 
-                    h.mark_hit(bid, kid, now)
-                    ball.flash_t = now
-                    self._score += 1
-
-        # ── Ball-ball elastic collisions ─────────────────────
+        # ── Ball-ball collisions ──────────────────────────────
         for i in range(len(self._balls)):
-            for j in range(i + 1, len(self._balls)):
-                a, b = self._balls[i], self._balls[j]
-                if a.caught and b.caught:
-                    continue
-                dx = b.x - a.x;  dy = b.y - a.y
-                dist = math.hypot(dx, dy)
-                min_d = a.r + b.r
-                if dist >= min_d or dist < 1e-3:
-                    continue
-                nx = dx / dist;  ny = dy / dist
-                overlap = min_d - dist
-                if not a.caught:
-                    a.x -= nx * overlap * 0.5;  a.y -= ny * overlap * 0.5
-                if not b.caught:
-                    b.x += nx * overlap * 0.5;  b.y += ny * overlap * 0.5
+            for j in range(i+1,len(self._balls)):
+                a,b = self._balls[i],self._balls[j]
+                if a.caught and b.caught: continue
+                dx,dy = b.x-a.x, b.y-a.y
+                dist = math.hypot(dx,dy)
+                md = a.r+b.r
+                if dist>=md or dist<1e-3: continue
+                nx,ny = dx/dist,dy/dist
+                ol = md-dist
+                if not a.caught: a.x-=nx*ol*0.5; a.y-=ny*ol*0.5
+                if not b.caught: b.x+=nx*ol*0.5; b.y+=ny*ol*0.5
                 if not a.caught and not b.caught:
-                    av = a.vx*nx + a.vy*ny
-                    bv = b.vx*nx + b.vy*ny
-                    a.vx += (bv-av)*nx;  a.vy += (bv-av)*ny
-                    b.vx += (av-bv)*nx;  b.vy += (av-bv)*ny
+                    av=a.vx*nx+a.vy*ny; bv=b.vx*nx+b.vy*ny
+                    a.vx+=(bv-av)*nx; a.vy+=(bv-av)*ny
+                    b.vx+=(av-bv)*nx; b.vy+=(av-bv)*ny
 
         # ── Physics ───────────────────────────────────────────
         for ball in self._balls:
-            ball.update(dt, fw, fh)
+            ball.update(dt,fw,fh)
 
         # ── Draw ─────────────────────────────────────────────
-        for ball in self._balls:
-            ball.draw(frame, now)
-        self._draw_hands(frame, active_hands)
-        self._draw_hud(frame, fw)
+        for ball in self._balls: ball.draw(frame,now)
+        self._draw_explosions(frame,now)
+        self._draw_hands(frame,active_hands,now)
+        self._draw_hud(frame,fw)
         return frame
 
-    def on_stop(self):
-        self._started = False
+    def on_stop(self): self._started = False
 
-    def tune(self, key: str):
-        if key.lower() == 'a' and len(self._balls) < self.MAX_BALLS:
-            self._balls.append(Ball(self._fw, self._fh))
-        elif key.lower() == 'd' and len(self._balls) > 1:
+    def tune(self, key):
+        if key.lower()=='a' and len(self._balls)<MAX_BALLS:
+            self._balls.append(Ball(self._fw,self._fh))
+        elif key.lower()=='d' and len(self._balls)>1:
             self._balls.pop()
+
+    # ── Explosion ─────────────────────────────────────────────
+
+    def _explode(self, ex, ey, force, radius, now):
+        for ball in self._balls:
+            if ball.caught:
+                ball.caught = False
+            dx,dy = ball.x-ex, ball.y-ey
+            dist = math.hypot(dx,dy)
+            if dist > radius: continue
+            if dist < 1: nx,ny=random.uniform(-1,1),random.uniform(-1,1)
+            else:        nx,ny=dx/dist,dy/dist
+            # Force falloff: full at centre, zero at edge
+            falloff = 1.0 - (dist/radius)
+            f = force * (falloff**0.5)
+            ball.vx += nx*f; ball.vy += ny*f
+            spd = math.hypot(ball.vx,ball.vy)
+            if spd > BALL_MAX_SPEED:
+                ball.vx=ball.vx/spd*BALL_MAX_SPEED
+                ball.vy=ball.vy/spd*BALL_MAX_SPEED
+            ball.flash_t = now
 
     # ── Drawing ───────────────────────────────────────────────
 
-    def _draw_hands(self, frame, hands):
+    def _draw_hands(self, frame, hands, now):
         for h in hands:
-            fist_col = (60, 60, 220)    # red-ish BGR for fist
-            hit_col  = (60, 220, 60)    # green for active hit point
-            idle_col = (80, 140, 80)    # dim green when stationary
+            fist_col  = (60,  60, 220)
+            hit_col   = (60, 220,  60)
+            idle_col  = (80, 140,  80)
+            for kid,kp in h.kps.items():
+                if h.closed: col = fist_col
+                else:        col = hit_col if kp.moving else idle_col
+                cv2.circle(frame,(int(kp.x),int(kp.y)),5,col,-1,cv2.LINE_AA)
 
-            for kid, kp in h.kps.items():
-                if h.closed:
-                    col = fist_col
-                else:
-                    col = hit_col if kp.moving else idle_col
-                # Small filled dot — no rings
-                cv2.circle(frame, (int(kp.x), int(kp.y)), 5, col, -1, cv2.LINE_AA)
+            if h.closed and h.fist_since is not None:
+                held  = now - h.fist_since
+                tier  = h.charge_tier
+                frac  = (held % CHARGE_TIER_SEC) / CHARGE_TIER_SEC
+                cx,cy = int(h.cx), int(h.cy)
+                r_ring = CATCH_RADIUS + 16 + tier*10
+
+                # Background ring
+                cv2.circle(frame,(cx,cy),r_ring,(40,40,60),CHARGE_TIMER_THICK,cv2.LINE_AA)
+
+                # Charge colour: yellow→orange→red per tier
+                tier_cols = [
+                    (60, 220, 255),   # tier 0 → cyan
+                    (60, 180, 255),   # tier 1 → blue-orange
+                    (40, 120, 255),   # tier 2 → orange
+                    (30,  60, 255),   # tier 3 → red
+                    (20,  20, 255),   # tier 4 → deep red
+                ]
+                arc_col = tier_cols[min(tier, len(tier_cols)-1)]
+
+                # Arc for current tier progress
+                angle_end = int(frac * 360)
+                if angle_end > 0:
+                    cv2.ellipse(frame,(cx,cy),(r_ring,r_ring),
+                                -90, 0, angle_end, arc_col, CHARGE_TIMER_THICK, cv2.LINE_AA)
+
+                # Completed tier dots around the ring
+                for t in range(tier):
+                    dot_ang = math.radians(-90 + t*(360//max(CHARGE_MAX_TIERS,1)))
+                    dx2 = int(cx + (r_ring+14)*math.cos(dot_ang))
+                    dy2 = int(cy + (r_ring+14)*math.sin(dot_ang))
+                    cv2.circle(frame,(dx2,dy2),6,arc_col,-1,cv2.LINE_AA)
+
+                # Tier label
+                lbl = f"x{tier+1}" if tier > 0 else ""
+                if lbl:
+                    (tw,_),_ = cv2.getTextSize(lbl,FONTS,0.65,2)
+                    cv2.putText(frame,lbl,(cx-tw//2,cy+6),FONTS,0.65,(0,0,0),3,cv2.LINE_AA)
+                    cv2.putText(frame,lbl,(cx-tw//2,cy+6),FONTS,0.65,arc_col,1,cv2.LINE_AA)
+
+    def _draw_explosions(self, frame, now):
+        still = []
+        for ex in self._explosions:
+            age = now - ex['ts']
+            if age > ex['dur']:
+                continue
+            still.append(ex)
+            a    = 1.0 - age/ex['dur']
+            r    = int(ex['r'] * (0.5 + 0.5*age/ex['dur']))
+            tier = ex['tier']
+            cols = [(60,220,255),(60,180,255),(40,120,255),(30,60,255),(20,20,255)]
+            col  = cols[min(tier-1, len(cols)-1)]
+            ov   = frame.copy()
+            cv2.circle(ov,(int(ex['x']),int(ex['y'])),r,col,3,cv2.LINE_AA)
+            cv2.addWeighted(ov, a*0.7, frame, 1-a*0.7, 0, frame)
+            # Inner flash
+            inner = max(4, int(r*0.3*a))
+            ov2 = frame.copy()
+            cv2.circle(ov2,(int(ex['x']),int(ex['y'])),inner,(255,255,255),-1,cv2.LINE_AA)
+            cv2.addWeighted(ov2, a*0.5, frame, 1-a*0.5, 0, frame)
+        self._explosions = still
 
     def _draw_hud(self, frame, fw):
         banner_h = 40
         ov = frame.copy()
-        cv2.rectangle(ov, (0,0),(fw,banner_h),(10,8,22),-1)
-        cv2.addWeighted(ov, 0.60, frame, 0.40, 0, frame)
-        cv2.putText(frame, "BOUNCE", (fw//2-42, 28), FONT, 0.85, (200,200,255), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Hits: {self._score}", (fw-110, 28), FONTS, 0.65, (100,255,180), 1, cv2.LINE_AA)
-        cv2.putText(frame, f"A/D  balls: {len(self._balls)}/{self.MAX_BALLS}",
-                    (8, 28), FONTS, 0.52, (180,180,220), 1, cv2.LINE_AA)
+        cv2.rectangle(ov,(0,0),(fw,banner_h),(10,8,22),-1)
+        cv2.addWeighted(ov,0.60,frame,0.40,0,frame)
+        cv2.putText(frame,"BOUNCE",(fw//2-42,28),FONT,0.85,(200,200,255),1,cv2.LINE_AA)
+        cv2.putText(frame,f"Hits: {self._score}",(fw-110,28),FONTS,0.65,(100,255,180),1,cv2.LINE_AA)
+        cv2.putText(frame,f"A/D  balls: {len(self._balls)}/{MAX_BALLS}",
+                    (8,28),FONTS,0.52,(180,180,220),1,cv2.LINE_AA)
