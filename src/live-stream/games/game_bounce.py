@@ -52,26 +52,43 @@ KNUCKLE_IDS  = [1, 5,  9, 13, 17]
 
 # ── Fist detection ────────────────────────────────────────────
 
-def _raw_is_fist(inst, thresh=0.22, ratio_thresh=1.15, min_tips=3) -> bool:
-    """Single-frame fist check. True = closed / no data."""
+def _raw_is_fist(inst, thresh=0.18) -> bool:
+    """
+    Fist detection based on keypoint spread relative to hand size.
+
+    Open hand: fingertips are spread far from the palm centre.
+    Closed fist: all keypoints cluster tightly — the bounding box
+    of confident keypoints is small relative to the wrist-to-middle-
+    knuckle distance (which stays roughly constant regardless of pose).
+
+    This is more robust than tip/knuckle ratios on low-confidence models
+    because it only needs the *overall pattern* of points, not specific tips.
+    """
     if not inst or len(inst) < 21:
         return True
-    wx, wy, wc = inst[0]
-    if wc < thresh:
+
+    good = [(x, y) for x, y, c in inst if c > thresh]
+    if len(good) < 5:
+        return True   # too few visible points — assume closed
+
+    # Hand size reference: wrist (0) → middle MCP (9)
+    wx, wy = inst[0][0], inst[0][1]
+    mx, my = inst[9][0], inst[9][1]
+    ref = math.hypot(mx - wx, my - wy)
+    if ref < 1:
         return True
-    extended = 0
-    for tip_id, knuck_id in zip(TIP_IDS, KNUCKLE_IDS):
-        tx, ty, tc = inst[tip_id]
-        kx, ky, kc = inst[knuck_id]
-        if tc < thresh or kc < thresh:
-            continue
-        td = math.hypot(tx - wx, ty - wy)
-        kd = math.hypot(kx - wx, ky - wy)
-        if kd < 1:
-            continue
-        if td / kd > ratio_thresh:
-            extended += 1
-    return extended < min_tips
+
+    # Spread = max distance between any two confident keypoints
+    max_dist = 0.0
+    for i in range(len(good)):
+        for j in range(i + 1, len(good)):
+            d = math.hypot(good[i][0]-good[j][0], good[i][1]-good[j][1])
+            if d > max_dist:
+                max_dist = d
+
+    # Normalised spread: open hand ≈ 1.8-2.5×, fist ≈ 0.8-1.2×
+    ratio = max_dist / ref
+    return ratio < 1.45   # below this = fist
 
 
 # ── Keypoint tracker ──────────────────────────────────────────
@@ -121,7 +138,7 @@ class Hand:
       - per-ball hit cooldowns
     """
     FIST_WINDOW  = 6     # frames for fist majority vote
-    HIT_COOL     = 0.16  # seconds between hits on same ball from same kp
+    HIT_COOL     = 0.05  # seconds between hits — ~every other frame at 30fps
     CATCH_RAD    = 48    # px — fist catch radius (from wrist/palm centre)
     KP_HIT_RAD   = 28    # px — per-keypoint hit radius
 
@@ -442,22 +459,17 @@ class Game(GamePlugin):
 
     def _draw_hands(self, frame, hands):
         for h in hands:
-            # Draw each active keypoint as a small dot
-            for kid, kp in h.kps.items():
-                col = (60,60,200) if h.closed else (
-                    (80,255,80) if kp.moving else (140,200,140))
-                cv2.circle(frame, (int(kp.x), int(kp.y)), 6, col, -1, cv2.LINE_AA)
-                cv2.circle(frame, (int(kp.x), int(kp.y)), Hand.KP_HIT_RAD,
-                           col, 1, cv2.LINE_AA)
+            fist_col = (60, 60, 220)    # red-ish BGR for fist
+            hit_col  = (60, 220, 60)    # green for active hit point
+            idle_col = (80, 140, 80)    # dim green when stationary
 
-            # Hand centre ring for fist indicator
-            col = (60,60,200) if h.closed else (80,200,80)
-            cv2.circle(frame, (int(h.cx), int(h.cy)), Hand.CATCH_RAD if h.closed else 8,
-                       col, 1 if not h.closed else 2, cv2.LINE_AA)
-            lbl = "FIST" if h.closed else "OPEN"
-            cv2.putText(frame, lbl,
-                        (int(h.cx)-18, int(h.cy) - Hand.CATCH_RAD - 6),
-                        FONTS, 0.42, col, 1, cv2.LINE_AA)
+            for kid, kp in h.kps.items():
+                if h.closed:
+                    col = fist_col
+                else:
+                    col = hit_col if kp.moving else idle_col
+                # Small filled dot — no rings
+                cv2.circle(frame, (int(kp.x), int(kp.y)), 5, col, -1, cv2.LINE_AA)
 
     def _draw_hud(self, frame, fw):
         banner_h = 40
