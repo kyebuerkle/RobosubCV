@@ -128,6 +128,41 @@ class KPTracker:
         return math.hypot(self.vx, self.vy)
 
 
+# ── Sweep / tunneling detection ──────────────────────────────
+
+def _segment_ball_intersect(
+    px: float, py: float,   # keypoint prev position
+    cx: float, cy: float,   # keypoint current position
+    bx: float, by: float,   # ball centre
+    r:  float,              # ball radius + kp hit radius
+) -> tuple[float, float, float] | None:
+    """
+    Return (hit_x, hit_y, t) if the segment p→c passes within r of the ball,
+    where t is the parametric position along the segment (0=start, 1=end).
+    Used to catch fast-moving keypoints that tunnel through the ball between frames.
+    Returns None if no intersection.
+    """
+    dx = cx - px;  dy = cy - py
+    fx = px - bx;  fy = py - by
+    a = dx*dx + dy*dy
+    if a < 1e-6:
+        return None
+    b = 2 * (fx*dx + fy*dy)
+    c_coef = fx*fx + fy*fy - r*r
+    disc = b*b - 4*a*c_coef
+    if disc < 0:
+        return None
+    disc_r = math.sqrt(disc)
+    t1 = (-b - disc_r) / (2*a)
+    t2 = (-b + disc_r) / (2*a)
+    # Pick the entry point that lies within the segment
+    for t in (t1, t2):
+        if 0.0 <= t <= 1.0:
+            hx = px + t*dx;  hy = py + t*dy
+            return hx, hy, t
+    return None
+
+
 # ── Hand tracker ─────────────────────────────────────────────
 
 class Hand:
@@ -146,6 +181,7 @@ class Hand:
         self.active  = False
         self.closed  = False          # majority-voted fist state
         self.cx = 0.0; self.cy = 0.0  # hand centre (wrist or centroid)
+        self._prev_cx = 0.0; self._prev_cy = 0.0
         self.kps: dict[int, KPTracker] = {}   # kid → tracker
         self._fist_votes: deque[bool] = deque(maxlen=self.FIST_WINDOW)
         self._cool: dict[tuple, float] = {}   # (ball_id, kp_id) → timestamp
@@ -154,6 +190,10 @@ class Hand:
         raw_fist = _raw_is_fist(inst)
         self._fist_votes.append(raw_fist)
         self.closed = sum(self._fist_votes) > len(self._fist_votes) / 2
+
+        # Store prev palm position for speed check in catch
+        self._prev_cx = self.cx
+        self._prev_cy = self.cy
 
         # Hand centre from wrist or centroid
         good = [(x, y, c) for x, y, c in inst if c > 0.20]
@@ -349,64 +389,118 @@ class Game(GamePlugin):
                 continue
 
             for h in active_hands:
-                # ── Fist catch: test against hand centre ─────
+                # ── Fist catch: closed AND hand moving slowly ────
                 if h.closed:
                     dist = math.hypot(ball.x - h.cx, ball.y - h.cy)
-                    if dist < Hand.CATCH_RAD + Ball.RADIUS and h.can_hit(bid, -1, now):
+                    # Only catch if palm is close AND hand is not sweeping fast
+                    palm_speed = math.hypot(
+                        h.cx - h._prev_cx, h.cy - h._prev_cy) / max(dt, 1e-4)
+                    slow_enough = palm_speed < 200   # px/s threshold to catch
+                    if dist < Hand.CATCH_RAD + Ball.RADIUS and slow_enough                             and h.can_hit(bid, -1, now):
                         ball.caught = True
                         ball.catch_off = (ball.x - h.cx, ball.y - h.cy)
                         ball.vx = 0.0;  ball.vy = 0.0
                         ball.flash_t = now
                         h.mark_hit(bid, -1, now)
                         self._score += 1
-                    continue   # fist doesn't slap
+                    elif h.closed and not slow_enough:
+                        # Moving fist = solid object — reflect ball off it
+                        if dist < Hand.CATCH_RAD + Ball.RADIUS and h.can_hit(bid, -1, now):
+                            if dist < 1: nx, ny = 1.0, 0.0
+                            else:
+                                nx = (ball.x - h.cx) / dist
+                                ny = (ball.y - h.cy) / dist
+                            dot = ball.vx*nx + ball.vy*ny
+                            ball.vx -= 2*dot*nx;  ball.vy -= 2*dot*ny
+                            # Add fist velocity
+                            ball.vx += nx * palm_speed * 0.6
+                            ball.vy += ny * palm_speed * 0.6
+                            spd = math.hypot(ball.vx, ball.vy)
+                            if spd > Ball.MAX_SPEED:
+                                ball.vx = ball.vx/spd*Ball.MAX_SPEED
+                                ball.vy = ball.vy/spd*Ball.MAX_SPEED
+                            overlap = (Hand.CATCH_RAD+Ball.RADIUS) - dist + 2
+                            ball.x += nx*overlap;  ball.y += ny*overlap
+                            h.mark_hit(bid, -1, now)
+                            ball.flash_t = now
+                    continue   # fist never slaps via keypoints
 
                 # ── Open hand: per-keypoint hits ─────────────
                 for kid, kp in h.kps.items():
-                    dist = math.hypot(ball.x - kp.x, ball.y - kp.y)
                     contact = Hand.KP_HIT_RAD + Ball.RADIUS
-
-                    if dist > contact:
-                        continue
                     if not h.can_hit(bid, kid, now):
                         continue
 
-                    # Normal from keypoint to ball centre
-                    if dist < 1:
+                    dist = math.hypot(ball.x - kp.x, ball.y - kp.y)
+
+                    # ── Sweep / tunnel detection ──────────────
+                    # Check if the keypoint path from last frame to this frame
+                    # swept through the ball — catches fast hands that jump over it.
+                    sweep_hit = None
+                    kp_speed = kp.speed
+                    if kp_speed > 80 and dist < contact * 3:
+                        sweep_hit = _segment_ball_intersect(
+                            kp.px, kp.py, kp.x, kp.y,
+                            ball.x, ball.y, float(contact))
+
+                    hit_this_kp = (dist <= contact) or (sweep_hit is not None)
+                    if not hit_this_kp:
+                        continue
+
+                    # Contact point and normal
+                    if sweep_hit is not None:
+                        # Use the sweep entry point for the normal
+                        hx, hy, _ = sweep_hit
+                        ddx = ball.x - hx;  ddy = ball.y - hy
+                        dn = math.hypot(ddx, ddy)
+                        if dn < 1: nx, ny = 1.0, 0.0
+                        else:      nx, ny = ddx/dn, ddy/dn
+                    elif dist < 1:
                         nx, ny = 1.0, 0.0
                     else:
                         nx = (ball.x - kp.x) / dist
                         ny = (ball.y - kp.y) / dist
 
                     # Reflect ball velocity off the keypoint surface
-                    dot = ball.vx * nx + ball.vy * ny
-                    ball.vx -= 2 * dot * nx
-                    ball.vy -= 2 * dot * ny
+                    dot = ball.vx*nx + ball.vy*ny
+                    ball.vx -= 2*dot*nx
+                    ball.vy -= 2*dot*ny
 
-                    # Add energy only if keypoint is moving fast enough
-                    # and moving TOWARD the ball
-                    if kp.moving:
-                        hand_dot = kp.vx * nx + kp.vy * ny  # neg = moving into ball
-                        if hand_dot < 0:
-                            contrib = abs(hand_dot)
-                            # Scale from MOVE_PX_S to MAX_IMPULSE
-                            t = _clamp(
-                                (contrib - self.MOVE_PX_S) /
+                    # Add energy: proportional to how fast the keypoint is
+                    # moving INTO the ball (along normal), above the dead zone.
+                    hand_dot = kp.vx*nx + kp.vy*ny   # neg = kp moving toward ball
+                    if hand_dot < -self.MOVE_PX_S:
+                        contrib = abs(hand_dot)
+                        t_scale = _clamp(
+                            (contrib - self.MOVE_PX_S) /
+                            max(self.MAX_IMPULSE - self.MOVE_PX_S, 1),
+                            0.0, 1.0)
+                        energy = contrib * t_scale
+                        ball.vx += nx * energy
+                        ball.vy += ny * energy
+
+                    # For sweep hits boost by the actual travelled distance
+                    # to account for the speed lost by slow inference
+                    if sweep_hit is not None:
+                        travel_spd = kp_speed
+                        if travel_spd > self.MOVE_PX_S:
+                            t_scale = _clamp(
+                                (travel_spd - self.MOVE_PX_S) /
                                 max(self.MAX_IMPULSE - self.MOVE_PX_S, 1),
                                 0.0, 1.0)
-                            energy = contrib * t
-                            ball.vx += nx * energy
-                            ball.vy += ny * energy
+                            ball.vx += nx * travel_spd * t_scale * 0.7
+                            ball.vy += ny * travel_spd * t_scale * 0.7
 
-                    # Cap and push out
+                    # Cap speed
                     spd = math.hypot(ball.vx, ball.vy)
                     if spd > Ball.MAX_SPEED:
-                        ball.vx = ball.vx / spd * Ball.MAX_SPEED
-                        ball.vy = ball.vy / spd * Ball.MAX_SPEED
+                        ball.vx = ball.vx/spd*Ball.MAX_SPEED
+                        ball.vy = ball.vy/spd*Ball.MAX_SPEED
 
-                    overlap = contact - dist + 2
-                    ball.x += nx * overlap
-                    ball.y += ny * overlap
+                    # Push ball out of contact zone
+                    if dist < contact:
+                        overlap = contact - dist + 2
+                        ball.x += nx*overlap;  ball.y += ny*overlap
 
                     h.mark_hit(bid, kid, now)
                     ball.flash_t = now
