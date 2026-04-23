@@ -60,8 +60,8 @@ SWEEP_MIN_SPEED    = 80      # px/s — keypoint speed to enable sweep detection
 # ── Charge explosion ──────────────────────────────────────────
 CHARGE_TIER_SEC    = 5.0     # seconds per charge tier
 CHARGE_MAX_TIERS   = 4       # maximum charge levels
-CHARGE_BASE_FORCE  = 700     # px/s added to each ball at tier 1
-CHARGE_FORCE_SCALE = 1.6     # multiplier per additional tier
+CHARGE_BASE_FORCE  = 1000     # px/s added to each ball at tier 1
+CHARGE_FORCE_SCALE = 2     # multiplier per additional tier
 CHARGE_BASE_RADIUS = 140     # px — explosion radius at tier 1
 CHARGE_RADIUS_GROW = 80      # px added per tier
 CHARGE_TIMER_THICK = 8       # px — arc thickness for circle timer
@@ -164,6 +164,7 @@ class Hand:
         self.fist_since:  float | None = None  # when fist started
         self.charge_tier: int = 0             # current tier
         self.prev_tier:   int = 0             # tier from last frame (for release)
+        self.last_seen:   float = 0.0         # timestamp of last real detection
 
     def update(self, inst, dt, now):
         self._fist_votes.append(_raw_is_fist(inst))
@@ -187,6 +188,7 @@ class Hand:
 
         # Track fist hold time for charge
         self.prev_tier = self.charge_tier   # snapshot before state update
+        self.last_seen = now                 # hand was seen this frame
 
         if self.closed:
             if self.fist_since is None:
@@ -306,20 +308,25 @@ class Game(GamePlugin):
         self._fw, self._fh = fw, fh
 
         # ── Update hands ──────────────────────────────────────
+        HAND_TIMEOUT = 2.0   # seconds unseen before charge resets
         active_hands: list[Hand] = []
-        # First mark ALL hands inactive — only re-activate below if seen this frame
-        for h in self._hands:
-            if h.active:
-                h.active = False
-                h.reset_charge()
+        seen_indices = set()
         for i, inst in enumerate(keypoints[:2]):
             if inst:
                 self._hands[i].update(inst, dt, now)
+                self._hands[i].active = True
                 active_hands.append(self._hands[i])
+                seen_indices.add(i)
+        # For hands not seen this frame: keep charge alive for HAND_TIMEOUT seconds,
+        # then reset so a long absence clears the charge but brief dropouts don't.
+        for i, h in enumerate(self._hands):
+            if i not in seen_indices:
+                h.active = False
+                if h.last_seen > 0 and (now - h.last_seen) > HAND_TIMEOUT:
+                    h.reset_charge()
         if not active_hands:
             for j,(label,conf,x1,y1,x2,y2) in enumerate(detections[:2]):
                 if conf > 0.25:
-                    self._hands[j].reset_charge()   # no pose = no accumulated charge
                     fake = [(((x1+x2)/2),((y1+y2)/2),0.1)]*21
                     self._hands[j].update(fake, dt, now)
                     self._hands[j].closed = True
@@ -505,7 +512,7 @@ class Game(GamePlugin):
 
             if h.closed and h.fist_since is not None:
                 held  = now - h.fist_since
-                if held < 1:          # don't show timer for first 1s
+                if held < 2.5:          # don't show timer for first 2.5s
                     continue
                 tier  = h.charge_tier
                 frac  = (held % CHARGE_TIER_SEC) / CHARGE_TIER_SEC
