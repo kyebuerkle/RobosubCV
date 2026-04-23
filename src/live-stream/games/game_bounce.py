@@ -161,8 +161,9 @@ class Hand:
         self._fist_votes: deque[bool] = deque(maxlen=FIST_VOTE_WINDOW)
         self._cool: dict[tuple, float] = {}
         # Charge state
-        self.fist_since: float | None = None   # when fist started
-        self.charge_tier: int = 0              # current tier
+        self.fist_since:  float | None = None  # when fist started
+        self.charge_tier: int = 0             # current tier
+        self.prev_tier:   int = 0             # tier from last frame (for release)
 
     def update(self, inst, dt, now):
         self._fist_votes.append(_raw_is_fist(inst))
@@ -185,6 +186,8 @@ class Hand:
                 self.kps[kid].update(x, y, dt)
 
         # Track fist hold time for charge
+        self.prev_tier = self.charge_tier   # snapshot before state update
+
         if self.closed:
             if self.fist_since is None:
                 self.fist_since = now
@@ -313,16 +316,16 @@ class Game(GamePlugin):
 
         # ── Check for charge release (fist→open) ──────────────
         for h in active_hands:
-            if not h.closed and h.charge_tier > 0:
-                # Hand just opened — release explosion
-                tier = h.charge_tier
-                force  = CHARGE_BASE_FORCE * (CHARGE_FORCE_SCALE ** (tier-1))
-                radius = CHARGE_BASE_RADIUS + CHARGE_RADIUS_GROW * (tier-1)
+            # prev_tier holds what the charge was BEFORE this frame's update
+            # (charge_tier is already 0 once hand opens)
+            if not h.closed and h.prev_tier > 0:
+                tier   = h.prev_tier
+                force  = CHARGE_BASE_FORCE * (CHARGE_FORCE_SCALE ** (tier - 1))
+                radius = CHARGE_BASE_RADIUS + CHARGE_RADIUS_GROW * (tier - 1)
                 self._explode(h.cx, h.cy, force, radius, now)
-                # Visual ring
                 self._explosions.append({
                     'x': h.cx, 'y': h.cy, 'r': radius,
-                    'tier': tier, 'ts': now, 'dur': 0.5
+                    'tier': tier, 'ts': now, 'dur': 0.55
                 })
 
         # ── Ball-hand interaction ─────────────────────────────
@@ -491,6 +494,8 @@ class Game(GamePlugin):
 
             if h.closed and h.fist_since is not None:
                 held  = now - h.fist_since
+                if held < 2.5:          # don't show timer for first 2.5s
+                    continue
                 tier  = h.charge_tier
                 frac  = (held % CHARGE_TIER_SEC) / CHARGE_TIER_SEC
                 cx,cy = int(h.cx), int(h.cy)
