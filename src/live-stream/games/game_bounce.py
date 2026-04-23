@@ -32,13 +32,13 @@ from game_plugin import GamePlugin
 # ═══════════════════════════════════════════════════════════════
 
 # ── Ball ──────────────────────────────────────────────────────
-BALL_RADIUS        = 20      # px — radius of each ball
+BALL_RADIUS        = 22      # px — radius of each ball
 BALL_FRICTION      = 0.990   # velocity multiplier per frame  (< 1 = slows down)
 BALL_MIN_SPEED     = 80      # px/s — balls never fully stop
-BALL_MAX_SPEED     = 2400    # px/s — hard speed cap
+BALL_MAX_SPEED     = 1600    # px/s — hard speed cap
 BALL_SPAWN_SPEED   = (220, 480)   # (min, max) px/s on spawn
 
-MAX_BALLS          = 16       # maximum balls at once
+MAX_BALLS          = 8       # maximum balls at once
 
 # ── Hand / keypoint detection ─────────────────────────────────
 KP_CONF_THRESH     = 0.18    # min keypoint confidence to use a point
@@ -59,12 +59,12 @@ SWEEP_MIN_SPEED    = 80      # px/s — keypoint speed to enable sweep detection
 
 # ── Charge explosion ──────────────────────────────────────────
 CHARGE_TIER_SEC    = 5.0     # seconds per charge tier
-CHARGE_MAX_TIERS   = 8       # maximum charge levels
-CHARGE_BASE_FORCE  = 1000     # px/s added to each ball at tier 1
-CHARGE_FORCE_SCALE = 2     # multiplier per additional tier
+CHARGE_MAX_TIERS   = 4       # maximum charge levels
+CHARGE_BASE_FORCE  = 700     # px/s added to each ball at tier 1
+CHARGE_FORCE_SCALE = 1.6     # multiplier per additional tier
 CHARGE_BASE_RADIUS = 140     # px — explosion radius at tier 1
 CHARGE_RADIUS_GROW = 80      # px added per tier
-CHARGE_TIMER_THICK = 4       # px — arc thickness for circle timer
+CHARGE_TIMER_THICK = 8       # px — arc thickness for circle timer
 
 # ── Visual ────────────────────────────────────────────────────
 TRAIL_LEN          = 14      # ball trail length in frames
@@ -205,6 +205,13 @@ class Hand:
     def palm_speed(self):
         return math.hypot(self.cx-self._prev_cx, self.cy-self._prev_cy)
 
+    def reset_charge(self):
+        """Call whenever the hand leaves the frame — clears all charge state."""
+        self.fist_since  = None
+        self.charge_tier = 0
+        self.prev_tier   = 0
+        self._fist_votes.clear()   # also clear vote window so stale fist votes don't linger
+
     def can_hit(self, bid, kid, now):
         return now - self._cool.get((bid,kid),-999) >= HIT_COOLDOWN
 
@@ -300,15 +307,19 @@ class Game(GamePlugin):
 
         # ── Update hands ──────────────────────────────────────
         active_hands: list[Hand] = []
+        # First mark ALL hands inactive — only re-activate below if seen this frame
+        for h in self._hands:
+            if h.active:
+                h.active = False
+                h.reset_charge()
         for i, inst in enumerate(keypoints[:2]):
             if inst:
                 self._hands[i].update(inst, dt, now)
                 active_hands.append(self._hands[i])
-            else:
-                self._hands[i].active = False
         if not active_hands:
             for j,(label,conf,x1,y1,x2,y2) in enumerate(detections[:2]):
                 if conf > 0.25:
+                    self._hands[j].reset_charge()   # no pose = no accumulated charge
                     fake = [(((x1+x2)/2),((y1+y2)/2),0.1)]*21
                     self._hands[j].update(fake, dt, now)
                     self._hands[j].closed = True
@@ -527,8 +538,9 @@ class Game(GamePlugin):
                     dy2 = int(cy + (r_ring+14)*math.sin(dot_ang))
                     cv2.circle(frame,(dx2,dy2),6,arc_col,-1,cv2.LINE_AA)
 
-                # Tier label
-                lbl = f"x{tier+1}" if tier > 0 else ""
+                # Tier label — only show if genuinely charged, capped at max
+                show_tier = min(tier, CHARGE_MAX_TIERS)
+                lbl = f"x{show_tier+1}" if show_tier >= 1 else ""
                 if lbl:
                     (tw,_),_ = cv2.getTextSize(lbl,FONTS,0.65,2)
                     cv2.putText(frame,lbl,(cx-tw//2,cy+6),FONTS,0.65,(0,0,0),3,cv2.LINE_AA)
