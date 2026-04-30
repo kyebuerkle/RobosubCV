@@ -38,7 +38,7 @@ BALL_MIN_SPEED     = 80      # px/s — balls never fully stop
 BALL_MAX_SPEED     = 1600    # px/s — hard speed cap
 BALL_SPAWN_SPEED   = (220, 480)   # (min, max) px/s on spawn
 
-MAX_BALLS          = 8       # maximum balls at once
+MAX_BALLS          = 12       # maximum balls at once
 
 # ── Hand / keypoint detection ─────────────────────────────────
 KP_CONF_THRESH     = 0.18    # min keypoint confidence to use a point
@@ -59,7 +59,7 @@ SWEEP_MIN_SPEED    = 80      # px/s — keypoint speed to enable sweep detection
 
 # ── Charge explosion ──────────────────────────────────────────
 CHARGE_TIER_SEC    = 5.0     # seconds per charge tier
-CHARGE_MAX_TIERS   = 4       # maximum charge levels
+CHARGE_MAX_TIERS   = 8       # maximum charge levels
 CHARGE_BASE_FORCE  = 1000     # px/s added to each ball at tier 1
 CHARGE_FORCE_SCALE = 2     # multiplier per additional tier
 CHARGE_BASE_RADIUS = 140     # px — explosion radius at tier 1
@@ -512,7 +512,7 @@ class Game(GamePlugin):
 
             if h.closed and h.fist_since is not None:
                 held  = now - h.fist_since
-                if held < 2.5:          # don't show timer for first 2.5s
+                if held < 0.8:          # don't show timer for first 2.5s
                     continue
                 tier  = h.charge_tier
                 frac  = (held % CHARGE_TIER_SEC) / CHARGE_TIER_SEC

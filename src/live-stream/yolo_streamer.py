@@ -219,6 +219,7 @@ class YoloStreamApp(tk.Tk):
 
         # ── Mirror ──
         self.mirror_var = tk.BooleanVar(value=True)
+        self.flip_vert_var = tk.BooleanVar(value=False)
 
         # ── Game plugin ──
         self._game        = None      # current game instance
@@ -373,6 +374,8 @@ class YoloStreamApp(tk.Tk):
         
         ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
                         variable=self.mirror_var).pack(anchor="w")
+        ttk.Checkbutton(ctrl, text="Flip Vertical",
+                        variable=self.flip_vert_var).pack(anchor="w")
 
         section(ctrl, "Resolution")
         hint(ctrl, "Lower res = faster capture + less resize work")
@@ -942,6 +945,8 @@ class YoloStreamApp(tk.Tk):
 
             if self.mirror_var.get():
                 frame = cv2.flip(frame, 1)
+            if self.flip_vert_var.get():
+                frame = cv2.flip(frame, 0)
 
             frame_count += 1
             skip      = max(1, int(self.skip_var.get()))
