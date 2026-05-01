@@ -4,6 +4,8 @@ Robosub Computer Vision is used for the Montana State University RoboCat's AUV t
 
 ##    Usage
 
+If you are on the RoboCats team, you can access the procedure pdf in *assets > pdf > RobosubCV_Procedure.pdf*.
+
 1. You have to setup your environment if you are using Tempest. Go through the **Model Creation: Setup** portion of the RoboSubCV Procedure.
    1. This will also setup your git and poetry. More notes on that are down below in the **Git & Poetry** section
    2. If you have Anaconda, run this command (doesn't matter OS): `bash env_setup.sh`
