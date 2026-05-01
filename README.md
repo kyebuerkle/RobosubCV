@@ -82,3 +82,11 @@ poetry run pytest
 
 this will run through all unit tests in any directory under 'src'
 use `-v` for verbose and get more information.
+
+##    Micro SD 
+
+The micro sd card is used for the Dataset Curation portion of the procedure. If you got a new SD card, and you want to upload the scripts. They are in `src/micro-sd`.
+
+1. make sure the SD card is formatted
+2. read the [file_structure](./src/micro-sd/file_structure.txt) text
+3. Create that structure, and copy the `data_ingestion.py` script into the proper place.

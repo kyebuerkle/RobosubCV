@@ -1,0 +1,159 @@
+Preparing a MicroSD Card for GoPro and RoboSub Use
+
+Purpose:
+This procedure explains how to prepare a MicroSD card for use in a GoPro action camera and for RoboSub dataset collection. It includes formatting the card, verifying the default GoPro folder structure, creating the required RoboSub folders, and placing the required scripts onto the card.
+
+Warning:
+Reformatting a MicroSD card will erase all data currently stored on the card. Before formatting, save any videos, images, or other files you want to keep onto your laptop.
+
+Requirements:
+- MicroSD card
+- SD card adapter or card reader, if needed
+- Laptop or desktop computer
+- GoPro action camera
+- Charged GoPro battery, if formatting in the camera
+
+Recommended Card Note:
+Use a MicroSD card with enough storage capacity and write speed for GoPro video recording. Before formatting, make sure the card is compatible with the GoPro camera being used.
+
+Official GoPro article on formatting an SD card:
+https://community.gopro.com/s/article/SD-Card-Reformat-on-a-Mac-Computer?language=en_US
+
+Formatting the Card on a Computer:
+1. Insert the MicroSD card into the computer.
+2. Open File Explorer.
+3. Right-click on the MicroSD card.
+4. Select Format.
+5. Make sure the correct file system is selected:
+   FAT32 for cards 32 GB or smaller
+   exFAT for cards 64 GB or larger
+6. Select Quick Format.
+7. Click Start.
+
+Formatting the Card in a GoPro Camera:
+If possible, the MicroSD card should be formatted using the GoPro camera itself. Formatting in the camera helps ensure that all existing data is removed, the correct file system is used, and the required GoPro folders are created automatically. This also helps reduce the risk of stray or incompatible files remaining on the card.
+
+For GoPro Hero 4 and Earlier:
+1. Turn on the camera.
+2. Press the Mode button on the front of the camera until the Setup menu appears on the front screen.
+3. Press the Shutter/Select button to enter the Setup menu.
+4. Press the Mode button until the trash can icon appears.
+5. Press the Shutter/Select button.
+6. Use the Mode button to select ALL/FORMAT.
+7. Select DELETE.
+8. The MicroSD card is now formatted.
+
+For GoPro Hero 5 and Later:
+1. Turn on the camera.
+2. Swipe down on the touchscreen.
+3. Select Preferences.
+4. Scroll down to Format SD Card.
+5. Select it.
+6. Choose DELETE or FORMAT.
+7. The MicroSD card is now formatted.
+
+Default GoPro Folder Structure:
+After formatting, the GoPro creates two main folders on the MicroSD card:
+DCIM
+MISC
+
+The MISC folder contains information related to the MicroSD card and the GoPro. The DCIM folder contains the 100GOPRO folder, which stores captured videos and images.
+
+Post-Format Verification:
+After formatting is complete:
+1. Reinsert the MicroSD card into the camera or computer if needed.
+2. Confirm that the card is readable.
+3. Confirm that the DCIM and MISC folders appear.
+4. Confirm that the card is ready for use before creating the RoboSub folder structure.
+
+RoboSub Competition Folder Structure:
+For RoboSub use, an additional folder system should be created on the MicroSD card to support video storage, sorting, frame extraction, and script storage.
+
+The folder structure should be:
+
+DCIM
+MISC
+Scripts_RBSTrain
+RoboSub_Dive_Capture
+  640x480_frames
+  all_objects
+  raw_videos
+  rejected_frames
+  renamed_sorted
+  section_1
+  section_2
+  section_3
+  section_4
+  section_5
+  section_6
+  section_7
+
+Creating the RoboSub Folder Structure:
+After formatting:
+1. Open the MicroSD card in File Explorer.
+2. Create a folder named Scripts_RBSTrain.
+3. Create a folder named RoboSub_Dive_Capture.
+4. Inside RoboSub_Dive_Capture, create the following subfolders:
+   640x480_frames
+   all_objects
+   raw_videos
+   rejected_frames
+   renamed_sorted
+   section_1
+   section_2
+   section_3
+   section_4
+   section_5
+   section_6
+   section_7
+
+Folder Purpose:
+Scripts_RBSTrain - stores the required dataset preparation and data ingestion script
+640x480_frames - stores resized extracted frames
+all_objects - stores combined object data
+raw_videos - stores original captured videos
+rejected_frames - stores discarded frames
+renamed_sorted - stores renamed and sorted files
+section_1 through section_7 - used during the data preparation procedure
+
+During the data collection procedure, subfolders should be created inside 640x480_frames and renamed_sorted for each object class captured in the pool.
+
+Related GitHub Procedure:
+If the required scripts must be downloaded from GitHub, refer to the data augmentation procedure for installing, setting up, and using GitHub. After the repository has been downloaded or cloned onto the computer, copy the required script files into the Scripts_RBSTrain folder on the MicroSD card. Make sure the correct script version is used, and do not rename folders or files that the scripts depend on.
+
+Naming Convention Notes:
+Use consistent folder names and file names throughout the dataset. Folder names and file names should not contain spaces if they will be used with automated scripts. Spaces can cause parsing problems or require extra handling in scripts.
+
+Examples:
+raw_videos
+rejected_frames
+section_1
+yellow_buoy_1.mp4
+green_buoy_2_frame_015.png
+
+Do not rename folders after the folder structure has been created, especially if scripts or later procedures depend on the original names.
+
+Common Mistakes:
+- Formatting the wrong drive by accident
+- Forgetting to back up files before formatting
+- Selecting the wrong file system
+- Forgetting to verify that the GoPro folders were created
+- Forgetting to add the Scripts_RBSTrain folder
+- Placing dataset files outside the required folder structure
+- Renaming folders after scripts or procedures have already been set up
+
+Troubleshooting:
+If the MicroSD card is not recognized by the GoPro:
+- Reinsert the card and restart the camera
+- Check that the correct file system was used
+- Format the card again using the GoPro camera if possible
+- Make sure the MicroSD card is compatible with the GoPro model
+
+Expected Result:
+After completing this procedure, the MicroSD card should:
+1. Be formatted in a file system compatible with the GoPro
+2. Contain the default GoPro folders DCIM and MISC
+3. Contain the Scripts_RBSTrain folder
+4. Contain the RoboSub_Dive_Capture folder
+5. Contain all required subfolders for data collection and preparation
+6. Be ready for capturing and organizing RoboSub competition footage
