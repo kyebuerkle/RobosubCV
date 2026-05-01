@@ -5,61 +5,55 @@ from pathlib import Path
 
 from general_lib import loading, Animations
 import augmentation.config as config
-from augmentation import yolo_change_exposure, yolo_change_saturation, yolo_change_resize
+from augmentation import yolo_augment
+from augmentation.augment_strategy import MODE_ALL, MODE_RANDOM, MODE_CALC
 from augmentation._shared_module import get_args
-
-def _do_yolo_augmentations(args, input_path, output_path):
-	"""this is just to simplify main, only use case is there"""
-	if args.exposure:
-		if config.VERBOSE:
-			print(f"\nApplying exposure augmentations: {args.exposure}")
-		yolo_change_exposure(
-			input_path,
-			output_path,
-			args.exposure,
-			"{file}_exp{ind}{ext}"
-			)
-		input_path = output_path
-	
-	if args.saturation:
-		if config.VERBOSE:
-			print(f"\nApplying saturation augmentations: {args.saturation}")
-		yolo_change_saturation(
-			input_path,
-			output_path,
-			args.saturation,
-			"{file}_sat{ind}{ext}"
-			)
-		input_path = output_path
-
-	if args.resize:
-		if config.VERBOSE:
-			print(f"\nApplying resize augmentation: {args.resize}")
-		yolo_change_resize(
-			input_path,
-			output_path,
-			args.resize,
-			"{file}_res{ind}{ext}"
-			)
-		input_path = output_path
 
 def main(args):
 	"""Main script"""
-	# Verify input directory exists
-	input_path = Path(args.input_dir).resolve()
+	input_path  = Path(args.input_dir).resolve()
 	output_path = Path(args.output_dir).resolve()
+
+	#	Build aug_config from whatever flags were passed — skip empty lists
+	aug_config = {}
+	if args.exposure:      aug_config['exposure']      = args.exposure
+	if args.contrast:      aug_config['contrast']      = args.contrast
+	if args.resize:        aug_config['resize']        = args.resize
+	if args.motion_blur:   aug_config['motion_blur']   = args.motion_blur
+	if args.gaussian_blur: aug_config['gaussian_blur'] = args.gaussian_blur
+	if args.hue_shift:     aug_config['hue_shift']     = args.hue_shift
+	if args.saturation:    aug_config['saturation']    = args.saturation
+
+	if not aug_config:
+		print("No augmentation arguments provided — nothing to do.")
+		return
+
+	if config.VERBOSE:
+		print(f"Augmentation mode:   {args.augment_mode}  (num={args.augment_num})")
+		print(f"Active aug types:    {list(aug_config.keys())}")
+		for k, v in aug_config.items():
+			print(f"  {k}: {v}")
 
 	#	determine if dataset is coco or yolov8
 	yaml_path = input_path / "data.yaml"
 	coco_path = input_path / "test/_annotations.coco.json"
 	if yaml_path.exists():
 		if config.VERBOSE:
-			print("Dataset is yolov8 formating")
-		_do_yolo_augmentations(args, input_path, output_path)
+			print("Dataset is yolov8 formatting")
+		yolo_augment(
+			input_dataset  = str(input_path),
+			output_dataset = str(output_path),
+			aug_config     = aug_config,
+			mode           = args.augment_mode,
+			num            = args.augment_num,
+		)
 	elif coco_path.exists():
 		if config.VERBOSE:
-			print("Dataset is coco formating")
+			print("Dataset is coco formatting")
 		print("Nothing to do for coco format yet")
+	else:
+		print(f"No data.yaml or coco annotation found in {input_path}")
+		return
 
 	if config.VERBOSE:
 		print("Finished augmenting dataset!")
@@ -71,4 +65,3 @@ if __name__ == "__main__":
 	else:
 		with loading("Augmenting ", Animations.coen_fight):
 			main(args)
-		

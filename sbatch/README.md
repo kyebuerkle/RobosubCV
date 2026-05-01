@@ -70,3 +70,11 @@ The specific reqs and specs that this repo covers is:
 - Obj 1
   
 (Chronologically in the order the Capstone team tested the specs)
+
+###   test_evaluate_yolo.sbatch
+
+run: `sbatch test_evaluate_yolo.sbatch`
+This script runs the verification tests in *model_training/tests*, use it in Tempest to run them faster.
+
+Discription on what the arguments in the script does are in more information [README.md](../src/model_training/README.md).
+`stream-out` saves wherever you run the script from, most liekly in this same directory. 

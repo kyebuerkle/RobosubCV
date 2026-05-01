@@ -40,6 +40,11 @@ The *YOLO Live Stream - CPU Edition* GUI pops up with a blank screen. On the lef
   - You can cahnge the global thickness of the labels too
 - **Performance stats** : Visual, used to check the stream performance
 - **CPU tips** : Visual, tips from Claude on how to optimize performance based on your device
+
+- **Tracking** : tracks the objects
+  - This was a last minute addition, to function like a real object detector. It can track the objects in the video
+  - This will make recognition smoother, and more steady.
+  - *last minute, I won't explain in detail*
   
 ---
 

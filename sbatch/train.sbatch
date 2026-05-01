@@ -10,7 +10,7 @@
 ## 1000G max for H100
 ## 500GB for Quad A100
 #SBATCH --mem=128G
-#SBATCH --time=0-04:00:00
+#SBATCH --time=0-12:00:00
 #SBATCH --job-name=RobosubCV
 ## %x is the job name and %j and the job number
 #SBATCH --output=./stream-out/%x-%j.out
@@ -23,4 +23,18 @@ source activate $HOME/.conda/envs/Training
 ROBOFLOW_URL=[ROBOFLOW_URL]
 
 poetry install
+
+# Debug block - remove after fixing
+echo "=== ENV DEBUG ==="
+python -c "
+import torch
+print('PyTorch:', torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+print('GPU count:', torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    print(f'  GPU {i}:', torch.cuda.get_device_name(i))
+"
+nvidia-smi
+echo "================="
+
 poetry run python $HOME/RobosubCV/src/model_training/train.py -u $ROBOFLOW_URL

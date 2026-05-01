@@ -1,24 +1,43 @@
 #!/usr/bin/env python3
 """
-YOLO Live Stream Viewer — GPU Edition
---------------------------------------
+YOLO Live Stream Viewer — GPU Edition  (Pose + Game Plugins)
+---------------------------------------------------------------------
 Targets ~30 FPS using:
   - CUDA (NVIDIA) or DirectML (AMD/Intel on Windows) acceleration
-  - TensorRT export option for NVIDIA (uncomment to use)
   - FP16 half-precision inference
   - Threaded capture pipeline with a frame queue
   - Inference runs at reduced imgsz=640, display at full res
   - Frame-skip ratio configurable from UI
 
+Pose features (via pose_renderer.py):
+  - Keypoint dots and skeleton lines drawn on frame
+  - Per-element colour and size controls in UI
+  - Works with 21-pt hand models and 17-pt COCO body models
+
+Tracking features (via object_tracker.py):
+  - Centroid / IoU multi-object tracking
+  - Occlusion memory and exponential box smoothing
+  - Majority-vote label smoothing
+
+Game plugin features:
+  - Browse any Python script that defines a Game(GamePlugin) class
+  - Game receives pose keypoints each frame and can draw on the frame
+  - Hot-swap games without restarting the stream
+
 GPU Setup:
   NVIDIA  → pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-  AMD/Intel (Windows) → pip install torch-directml   (experimental, CPU fallback if unavailable)
+  AMD/Intel (Windows) → pip install torch-directml
 
 Requirements:
-    pip install ultralytics opencv-python pillow
+    pip install ultralytics opencv-python pillow numpy
     + one of the GPU packages above
+    object_tracker.py  ← same directory
+    pose_renderer.py   ← same directory
+    game_plugin.py     ← same directory
+    game_bounce.py     ← example game (optional)
 """
 
+import importlib.util
 import queue
 import threading
 import time
@@ -30,16 +49,15 @@ import numpy as np
 from PIL import Image, ImageTk
 from ultralytics import YOLO
 
+from object_tracker import ObjectTracker
+from pose_renderer import PoseRenderer, PoseStyles, extract_keypoints
+
 
 # ──────────────────────────────────────────────
 #  GPU / device detection
 # ──────────────────────────────────────────────
 
 def detect_device() -> tuple[str, str]:
-    """
-    Returns (device_string_for_yolo, human_label).
-    Priority: CUDA > DirectML > CPU
-    """
     try:
         import torch
         if torch.cuda.is_available():
@@ -49,7 +67,7 @@ def detect_device() -> tuple[str, str]:
         pass
 
     try:
-        import torch_directml          # AMD / Intel on Windows
+        import torch_directml
         dml_device = torch_directml.device()
         return str(dml_device), "DirectML (AMD/Intel)"
     except (ImportError, Exception):
@@ -68,7 +86,7 @@ DEVICE, DEVICE_LABEL = detect_device()
 def find_cameras(max_index: int = 10) -> list[dict]:
     cameras = []
     for idx in range(max_index):
-        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)   # CAP_DSHOW = faster on Windows
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
         if cap.isOpened():
             backend = cap.getBackendName() if hasattr(cap, "getBackendName") else ""
             cameras.append({"index": idx, "label": f"Camera {idx}  [{backend}]"})
@@ -85,6 +103,14 @@ def hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
 def bgr_to_hex(bgr: tuple[int, int, int]) -> str:
     b, g, r = bgr
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def load_game_plugin(path: str):
+    """Dynamically import a game script and return an instance of its Game class."""
+    spec = importlib.util.spec_from_file_location("_game_module", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.Game()
 
 
 # ──────────────────────────────────────────────
@@ -114,12 +140,12 @@ class LabelStyles:
 # ──────────────────────────────────────────────
 
 class YoloStreamApp(tk.Tk):
-    RENDER_DELAY_MS = 16          # UI refresh (~60 fps cap)
-    FRAME_QUEUE_SIZE = 2          # keep pipeline lean to reduce latency
+    RENDER_DELAY_MS = 16
+    FRAME_QUEUE_SIZE = 2
 
     def __init__(self):
         super().__init__()
-        self.title("YOLO Live Stream — GPU Edition")
+        self.title("YOLO Live Stream — GPU Edition  ✦ Pose + Games")
         self.resizable(True, True)
         self.configure(bg="#1e1e2e")
 
@@ -135,11 +161,43 @@ class YoloStreamApp(tk.Tk):
         self._raw_queue: queue.Queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
         self._display_queue: queue.Queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
 
-        # Settings vars
-        self.confidence = tk.DoubleVar(value=0.40)
-        self.imgsz_var = tk.IntVar(value=640)
-        self.skip_var = tk.IntVar(value=1)    # infer every N frames (1 = every frame)
-        self.use_half = tk.BooleanVar(value=DEVICE.startswith("cuda"))
+        # ── Inference settings ──
+        self.confidence   = tk.DoubleVar(value=0.40)
+        self.imgsz_var    = tk.IntVar(value=640)
+        self.skip_var     = tk.IntVar(value=1)
+        self.use_half     = tk.BooleanVar(value=DEVICE.startswith("cuda"))
+
+        # ── Tracking settings ──
+        self.tracking_enabled    = tk.BooleanVar(value=True)
+        self.iou_threshold_var   = tk.DoubleVar(value=0.30)
+        self.max_lost_frames_var = tk.IntVar(value=15)
+        self.smooth_alpha_var    = tk.DoubleVar(value=0.40)
+        self.label_smooth_var    = tk.IntVar(value=5)
+
+        # ── Pose settings ──
+        self.pose_styles   = PoseStyles()
+        self.pose_renderer = PoseRenderer(self.pose_styles)
+        self.show_boxes_var     = tk.BooleanVar(value=True)
+        self.show_keypoints_var = tk.BooleanVar(value=True)
+        self.show_skeleton_var  = tk.BooleanVar(value=True)
+
+        # ── Mirror ──
+        self.mirror_var = tk.BooleanVar(value=True)
+
+        # ── Game plugin ──
+        self._game      = None
+        self._game_path = tk.StringVar(value="No game loaded")
+        self._game_lock = threading.Lock()
+        self._last_kps: list = []
+        self._last_detections: list = []
+
+        # ── Tracker ──
+        self.tracker = ObjectTracker(
+            iou_threshold       = self.iou_threshold_var.get(),
+            max_lost_frames     = self.max_lost_frames_var.get(),
+            smooth_alpha        = self.smooth_alpha_var.get(),
+            label_smooth_frames = self.label_smooth_var.get(),
+        )
 
         # FPS tracking
         self._fps_times: list[float] = []
@@ -148,7 +206,19 @@ class YoloStreamApp(tk.Tk):
         self._build_ui()
         self._refresh_cameras()
 
-    # ── UI ──────────────────────────────────
+    # ── Sync tracker params ───────────────────
+
+    def _sync_tracker(self, *_):
+        self.tracker.iou_threshold       = self.iou_threshold_var.get()
+        self.tracker.max_lost_frames     = self.max_lost_frames_var.get()
+        self.tracker.smooth_alpha        = self.smooth_alpha_var.get()
+        self.tracker.label_smooth_frames = self.label_smooth_var.get()
+
+    def _sync_pose_styles(self, *_):
+        self.pose_styles.show_keypoints = self.show_keypoints_var.get()
+        self.pose_styles.show_skeleton  = self.show_skeleton_var.get()
+
+    # ── UI ───────────────────────────────────
 
     def _build_ui(self):
         PAD = 10
@@ -156,41 +226,84 @@ class YoloStreamApp(tk.Tk):
         FG = "#cdd6f4"
         ACCENT = "#89b4fa"
         BTN_BG = "#313244"
+        WARN = "#fab387"
 
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TFrame", background=PANEL_BG)
-        style.configure("TLabel", background=PANEL_BG, foreground=FG, font=("Segoe UI", 10))
-        style.configure("TButton", background=BTN_BG, foreground=FG, font=("Segoe UI", 10), borderwidth=0)
-        style.map("TButton", background=[("active", ACCENT)])
-        style.configure("TScale", background=PANEL_BG)
-        style.configure("TCombobox", fieldbackground=BTN_BG, background=BTN_BG, foreground=FG)
+        style.configure("TFrame",       background=PANEL_BG)
+        style.configure("TLabel",       background=PANEL_BG, foreground=FG, font=("Segoe UI", 10))
+        style.configure("TButton",      background=BTN_BG,   foreground=FG, font=("Segoe UI", 10), borderwidth=0)
+        style.configure("TScale",       background=PANEL_BG)
+        style.configure("TCombobox",    fieldbackground=BTN_BG, background=BTN_BG, foreground=FG)
         style.configure("Accent.TButton", background=ACCENT, foreground="#1e1e2e",
                         font=("Segoe UI", 10, "bold"))
-        style.map("Accent.TButton", background=[("active", "#74c7ec")])
+        style.map("TButton",            background=[("active", ACCENT)])
+        style.map("Accent.TButton",     background=[("active", "#74c7ec")])
         style.configure("TCheckbutton", background=PANEL_BG, foreground=FG)
+        style.configure("TRadiobutton", background=PANEL_BG, foreground=FG, font=("Segoe UI", 9))
 
         def section(parent, text):
             ttk.Label(parent, text=text, foreground=ACCENT,
                       font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(10, 2))
 
-        # ── Control panel ──
-        ctrl = ttk.Frame(self, padding=PAD)
-        ctrl.pack(side=tk.LEFT, fill=tk.Y, padx=(PAD, 0), pady=PAD)
+        def hint(parent, text):
+            ttk.Label(parent, text=text, foreground="#6c7086",
+                      font=("Segoe UI", 8)).pack(anchor="w")
+
+        def slider_row(parent, var, lo, hi, fmt="{:.2f}", step=None, trace=None):
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=2)
+            lbl = ttk.Label(row, text=fmt.format(var.get()), width=7)
+            lbl.pack(side=tk.RIGHT)
+
+            def _update(v):
+                lbl.configure(text=fmt.format(float(v) if "." in fmt else int(float(v))))
+                self._sync_tracker()
+                if trace:
+                    trace(v)
+
+            ttk.Scale(row, from_=lo, to=hi, variable=var,
+                      orient=tk.HORIZONTAL, command=_update
+                      ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+            return row, lbl
+
+        # ── Scrollable left panel ──────────────
+        left_outer = tk.Frame(self, bg=PANEL_BG, width=270)
+        left_outer.pack(side=tk.LEFT, fill=tk.Y)
+        left_outer.pack_propagate(False)
+
+        canvas_scroll = tk.Canvas(left_outer, bg=PANEL_BG, highlightthickness=0, width=265)
+        scrollbar = ttk.Scrollbar(left_outer, orient="vertical", command=canvas_scroll.yview)
+        canvas_scroll.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas_scroll.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        ctrl = ttk.Frame(canvas_scroll, padding=(PAD, PAD, PAD, PAD))
+        ctrl_window = canvas_scroll.create_window((0, 0), window=ctrl, anchor="nw")
+
+        def _on_frame_configure(event):
+            canvas_scroll.configure(scrollregion=canvas_scroll.bbox("all"))
+        def _on_canvas_configure(event):
+            canvas_scroll.itemconfig(ctrl_window, width=event.width)
+
+        ctrl.bind("<Configure>", _on_frame_configure)
+        canvas_scroll.bind("<Configure>", _on_canvas_configure)
+        canvas_scroll.bind_all("<MouseWheel>",
+            lambda e: canvas_scroll.yview_scroll(int(-1*(e.delta/120)), "units"))
 
         # Device badge
         dev_color = "#a6e3a1" if "CUDA" in DEVICE_LABEL else (
                     "#fab387" if "DirectML" in DEVICE_LABEL else "#f38ba8")
         tk.Label(ctrl, text=f"⚡ {DEVICE_LABEL}", bg=PANEL_BG, fg=dev_color,
-                 font=("Segoe UI", 9, "bold"), wraplength=230).pack(anchor="w", pady=(0, 4))
+                 font=("Segoe UI", 9, "bold"), wraplength=240).pack(anchor="w", pady=(0, 4))
 
-        # Model
+        # ── Model ──
         section(ctrl, "Model")
-        ttk.Label(ctrl, textvariable=self.model_path, wraplength=220,
+        ttk.Label(ctrl, textvariable=self.model_path, wraplength=230,
                   foreground="#a6e3a1").pack(anchor="w")
         ttk.Button(ctrl, text="Browse .pt file…", command=self._browse_model).pack(fill=tk.X, pady=4)
 
-        # Camera
+        # ── Camera ──
         section(ctrl, "Camera")
         cam_row = ttk.Frame(ctrl)
         cam_row.pack(fill=tk.X)
@@ -200,7 +313,7 @@ class YoloStreamApp(tk.Tk):
         self.cam_combo.pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(cam_row, text="↻", width=3, command=self._refresh_cameras).pack(side=tk.LEFT, padx=(4, 0))
 
-        # Confidence
+        # ── Confidence ──
         section(ctrl, "Confidence")
         conf_row = ttk.Frame(ctrl)
         conf_row.pack(fill=tk.X)
@@ -211,30 +324,167 @@ class YoloStreamApp(tk.Tk):
                   command=lambda v: self.conf_label.configure(
                       text=f"{float(v):.2f}")).pack(side=tk.LEFT, expand=True, fill=tk.X)
 
-        # Inference size
+        # ── Inference size ──
         section(ctrl, "Inference size (imgsz)")
-        ttk.Label(ctrl, text="Lower = faster, less accurate",
-                  foreground="#bac2de", font=("Segoe UI", 8)).pack(anchor="w")
+        hint(ctrl, "Lower = faster, less accurate")
         imgsz_row = ttk.Frame(ctrl)
         imgsz_row.pack(fill=tk.X, pady=2)
         for sz in (320, 480, 640):
             ttk.Radiobutton(imgsz_row, text=str(sz), variable=self.imgsz_var,
                             value=sz).pack(side=tk.LEFT, padx=4)
 
-        # Frame skip
+        # ── Frame skip ──
         section(ctrl, "Infer every N frames")
-        ttk.Label(ctrl, text="Higher = faster UI, boxes update less often",
-                  foreground="#bac2de", font=("Segoe UI", 8)).pack(anchor="w")
+        hint(ctrl, "Higher = faster UI, boxes update less often")
         skip_row = ttk.Frame(ctrl)
         skip_row.pack(fill=tk.X, pady=2)
         ttk.Spinbox(skip_row, from_=1, to=8, textvariable=self.skip_var, width=4).pack(side=tk.LEFT)
 
-        # Half precision
+        # ── Half precision ──
         section(ctrl, "Performance")
         ttk.Checkbutton(ctrl, text="FP16 half precision (NVIDIA only)",
                         variable=self.use_half).pack(anchor="w")
 
-        # Stream controls
+        # ═══════════════════════════════════════
+        #  TRACKING
+        # ═══════════════════════════════════════
+        section(ctrl, "━━  Object Tracking  ━━")
+        ttk.Checkbutton(ctrl, text="Enable tracking & smoothing",
+                        variable=self.tracking_enabled).pack(anchor="w", pady=(0, 4))
+
+        hint(ctrl, "Match threshold (IoU) — higher = stricter matching")
+        _, self._iou_lbl = slider_row(ctrl, self.iou_threshold_var, 0.05, 0.90, "{:.2f}")
+
+        section(ctrl, "Occlusion memory (frames)")
+        hint(ctrl, "Frames a hidden track stays alive behind an object")
+        lost_row = ttk.Frame(ctrl)
+        lost_row.pack(fill=tk.X, pady=2)
+        lost_lbl = ttk.Label(lost_row, text=str(self.max_lost_frames_var.get()), width=5)
+        lost_lbl.pack(side=tk.RIGHT)
+
+        def _lost_update(v):
+            lost_lbl.configure(text=str(int(float(v))))
+            self._sync_tracker()
+
+        ttk.Scale(lost_row, from_=0, to=60, variable=self.max_lost_frames_var,
+                  orient=tk.HORIZONTAL, command=_lost_update
+                  ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        section(ctrl, "Box smoothing  (alpha)")
+        hint(ctrl, "0 = frozen / no update,  1 = raw / jumpy")
+        slider_row(ctrl, self.smooth_alpha_var, 0.01, 1.0, "{:.2f}")
+
+        section(ctrl, "Label smoothing window (frames)")
+        hint(ctrl, "Majority-vote over last N frames to stabilise class")
+        lbl_win_row = ttk.Frame(ctrl)
+        lbl_win_row.pack(fill=tk.X, pady=2)
+        lbl_win_lbl = ttk.Label(lbl_win_row, text=str(self.label_smooth_var.get()), width=5)
+        lbl_win_lbl.pack(side=tk.RIGHT)
+
+        def _lbl_win_update(v):
+            lbl_win_lbl.configure(text=str(int(float(v))))
+            self._sync_tracker()
+
+        ttk.Scale(lbl_win_row, from_=1, to=30, variable=self.label_smooth_var,
+                  orient=tk.HORIZONTAL, command=_lbl_win_update
+                  ).pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        ttk.Button(ctrl, text="Reset Tracks", command=self.tracker.reset).pack(fill=tk.X, pady=4)
+
+        # ═══════════════════════════════════════
+        #  POSE OVERLAY
+        # ═══════════════════════════════════════
+        section(ctrl, "━━  Pose Overlay  ━━")
+
+        ttk.Checkbutton(ctrl, text="Show bounding boxes",
+                        variable=self.show_boxes_var).pack(anchor="w")
+        ttk.Checkbutton(ctrl, text="Mirror (flip horizontal)",
+                        variable=self.mirror_var).pack(anchor="w")
+
+        kp_row = ttk.Frame(ctrl)
+        kp_row.pack(fill=tk.X, pady=(4, 0))
+        ttk.Checkbutton(kp_row, text="Keypoints",
+                        variable=self.show_keypoints_var,
+                        command=self._sync_pose_styles).pack(side=tk.LEFT)
+        self._kp_color_swatch = tk.Label(kp_row,
+            bg=bgr_to_hex(self.pose_styles.keypoint_color),
+            width=3, relief="solid", cursor="hand2")
+        self._kp_color_swatch.pack(side=tk.LEFT, padx=6)
+        self._kp_color_swatch.bind("<Button-1>", self._pick_kp_color)
+
+        sk_row = ttk.Frame(ctrl)
+        sk_row.pack(fill=tk.X, pady=(2, 0))
+        ttk.Checkbutton(sk_row, text="Skeleton",
+                        variable=self.show_skeleton_var,
+                        command=self._sync_pose_styles).pack(side=tk.LEFT)
+        self._sk_color_swatch = tk.Label(sk_row,
+            bg=bgr_to_hex(self.pose_styles.skeleton_color),
+            width=3, relief="solid", cursor="hand2")
+        self._sk_color_swatch.pack(side=tk.LEFT, padx=6)
+        self._sk_color_swatch.bind("<Button-1>", self._pick_sk_color)
+
+        kpr_row = ttk.Frame(ctrl)
+        kpr_row.pack(fill=tk.X, pady=2)
+        ttk.Label(kpr_row, text="Dot size:").pack(side=tk.LEFT)
+        self._kp_radius_var = tk.IntVar(value=self.pose_styles.keypoint_radius)
+        kpr_lbl = ttk.Label(kpr_row, text=str(self.pose_styles.keypoint_radius), width=3)
+        kpr_lbl.pack(side=tk.RIGHT)
+        ttk.Scale(kpr_row, from_=2, to=20, variable=self._kp_radius_var,
+                  orient=tk.HORIZONTAL,
+                  command=lambda v: (
+                      setattr(self.pose_styles, "keypoint_radius", int(float(v))),
+                      kpr_lbl.configure(text=str(int(float(v))))
+                  )).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=4)
+
+        skt_row = ttk.Frame(ctrl)
+        skt_row.pack(fill=tk.X, pady=2)
+        ttk.Label(skt_row, text="Bone width:").pack(side=tk.LEFT)
+        self._sk_thick_var = tk.IntVar(value=self.pose_styles.skeleton_thick)
+        skt_lbl = ttk.Label(skt_row, text=str(self.pose_styles.skeleton_thick), width=3)
+        skt_lbl.pack(side=tk.RIGHT)
+        ttk.Scale(skt_row, from_=1, to=10, variable=self._sk_thick_var,
+                  orient=tk.HORIZONTAL,
+                  command=lambda v: (
+                      setattr(self.pose_styles, "skeleton_thick", int(float(v))),
+                      skt_lbl.configure(text=str(int(float(v))))
+                  )).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=4)
+
+        conf_gate_row = ttk.Frame(ctrl)
+        conf_gate_row.pack(fill=tk.X, pady=2)
+        ttk.Label(conf_gate_row, text="KP conf:").pack(side=tk.LEFT)
+        self._kp_conf_var = tk.DoubleVar(value=self.pose_styles.conf_threshold)
+        kp_conf_lbl = ttk.Label(conf_gate_row, text=f"{self.pose_styles.conf_threshold:.2f}", width=5)
+        kp_conf_lbl.pack(side=tk.RIGHT)
+        ttk.Scale(conf_gate_row, from_=0.0, to=1.0, variable=self._kp_conf_var,
+                  orient=tk.HORIZONTAL,
+                  command=lambda v: (
+                      setattr(self.pose_styles, "conf_threshold", float(v)),
+                      kp_conf_lbl.configure(text=f"{float(v):.2f}")
+                  )).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=4)
+
+        # ═══════════════════════════════════════
+        #  GAME PLUGIN
+        # ═══════════════════════════════════════
+        section(ctrl, "━━  Game Plugin  ━━")
+        hint(ctrl, "Load a .py file with a Game class to play")
+        ttk.Label(ctrl, textvariable=self._game_path,
+                  wraplength=230, foreground="#cba6f7").pack(anchor="w", pady=(2, 0))
+
+        game_btn_row = ttk.Frame(ctrl)
+        game_btn_row.pack(fill=tk.X, pady=4)
+        ttk.Button(game_btn_row, text="Browse game…",
+                   command=self._browse_game).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        ttk.Button(game_btn_row, text="Unload",
+                   command=self._unload_game).pack(side=tk.LEFT, padx=(4, 0))
+
+        ttk.Button(ctrl, text="Toggle XY mode  [X]",
+                   command=self._game_key).pack(fill=tk.X, pady=(0, 2))
+        self._game_status_var = tk.StringVar(value="No game loaded.")
+        tk.Label(ctrl, textvariable=self._game_status_var, bg=PANEL_BG,
+                 fg="#cba6f7", font=("Segoe UI", 8), wraplength=230,
+                 justify=tk.LEFT).pack(anchor="w")
+
+        # ── Stream controls ──
         section(ctrl, "Stream")
         self.start_btn = ttk.Button(ctrl, text="▶  Start Stream",
                                     style="Accent.TButton", command=self._start_stream)
@@ -243,7 +493,7 @@ class YoloStreamApp(tk.Tk):
                                    command=self._stop_stream, state=tk.DISABLED)
         self.stop_btn.pack(fill=tk.X, pady=2)
 
-        # Label styles
+        # ── Label styles ──
         section(ctrl, "Label Styles")
         self.label_list_var = tk.StringVar()
         self.label_combo = ttk.Combobox(ctrl, textvariable=self.label_list_var,
@@ -267,16 +517,16 @@ class YoloStreamApp(tk.Tk):
                     width=5, command=self._save_label_style).pack(side=tk.LEFT, padx=6)
         ttk.Button(ctrl, text="Apply Style", command=self._save_label_style).pack(fill=tk.X)
 
-        # FPS display
+        # ── Stats ──
         section(ctrl, "Performance stats")
-        self.fps_var = tk.StringVar(value="Display: — fps\nInfer:   — fps")
+        self.fps_var = tk.StringVar(value="Display: — fps\nInfer:   — fps\nTracks:  —")
         tk.Label(ctrl, textvariable=self.fps_var, bg=PANEL_BG, fg="#a6e3a1",
                  font=("Consolas", 10), justify=tk.LEFT).pack(anchor="w")
 
         # Status
         self.status_var = tk.StringVar(value="Ready — load a model and select a camera.")
         tk.Label(ctrl, textvariable=self.status_var, bg=PANEL_BG, fg="#f38ba8",
-                 wraplength=230, justify=tk.LEFT, font=("Segoe UI", 9)).pack(
+                 wraplength=240, justify=tk.LEFT, font=("Segoe UI", 9)).pack(
                      anchor="w", pady=(10, 0))
 
         # ── Canvas ──
@@ -285,6 +535,70 @@ class YoloStreamApp(tk.Tk):
         self.canvas = tk.Canvas(canvas_frame, bg="#11111b", highlightthickness=0,
                                 width=854, height=480)
         self.canvas.pack(fill=tk.BOTH, expand=True)
+
+    # ── Pose colour pickers ───────────────────
+
+    def _pick_kp_color(self, _event=None):
+        result = colorchooser.askcolor(
+            color=bgr_to_hex(self.pose_styles.keypoint_color),
+            title="Keypoint dot colour")
+        if result and result[1]:
+            self.pose_styles.keypoint_color = hex_to_bgr(result[1])
+            self._kp_color_swatch.configure(bg=result[1])
+
+    def _pick_sk_color(self, _event=None):
+        result = colorchooser.askcolor(
+            color=bgr_to_hex(self.pose_styles.skeleton_color),
+            title="Skeleton line colour")
+        if result and result[1]:
+            self.pose_styles.skeleton_color = hex_to_bgr(result[1])
+            self._sk_color_swatch.configure(bg=result[1])
+
+    # ── Game plugin ───────────────────────────
+
+    def _browse_game(self):
+        path = filedialog.askopenfilename(
+            title="Select game plugin (.py)",
+            filetypes=[("Python script", "*.py"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            game = load_game_plugin(path)
+            with self._game_lock:
+                if self._game is not None:
+                    try:
+                        self._game.on_stop()
+                    except Exception:
+                        pass
+                self._game = game
+                if self.streaming:
+                    cw = self.canvas.winfo_width()
+                    ch = self.canvas.winfo_height()
+                    cn = list(self.model.names.values()) if self.model else None
+                    self._game.on_start(cw if cw > 1 else 854, ch if ch > 1 else 480, cn)
+            short = path.split("/")[-1].split("\\")[-1]
+            self._game_path.set(short)
+            self._game_status_var.set(f"✓ Loaded: {short}")
+            # Bind X key for games that support toggle_xy
+            for seq in ("<x>","<X>","<d>","<D>","<plus>","<minus>",
+                        "<q>","<Q>","<w>","<W>","<a>","<A>","<s>","<S>",
+                        "<space>","<r>","<R>"):
+                self.bind(seq, self._game_key)
+        except Exception as exc:
+            messagebox.showerror("Game load error", str(exc))
+            self._game_status_var.set(f"Error: {exc}")
+
+    def _unload_game(self):
+        with self._game_lock:
+            if self._game is not None:
+                try:
+                    self._game.on_stop()
+                except Exception:
+                    pass
+                self._game = None
+        self._game_path.set("No game loaded")
+        self._game_status_var.set("No game loaded.")
 
     # ── Cameras ──────────────────────────────
 
@@ -314,7 +628,6 @@ class YoloStreamApp(tk.Tk):
             self.update_idletasks()
             self.model = YOLO(path)
 
-            # Warm up on the target device
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
             self.model(dummy, device=DEVICE, verbose=False,
                        half=self.use_half.get() and DEVICE.startswith("cuda"))
@@ -371,19 +684,28 @@ class YoloStreamApp(tk.Tk):
 
         cam_index = self.cameras[self.cam_combo.current()]["index"]
         self.cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
-        # Request higher FPS from the camera driver
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.cap.set(cv2.CAP_PROP_FPS, 60)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # minimize buffer lag
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not self.cap.isOpened():
             messagebox.showerror("Camera error", f"Could not open camera {cam_index}.")
             return
 
-        # Clear queues
         self._raw_queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
         self._display_queue = queue.Queue(maxsize=self.FRAME_QUEUE_SIZE)
+        self.tracker.reset()
+        self._sync_tracker()
+        self._sync_pose_styles()
+
+        with self._game_lock:
+            if self._game is not None:
+                try:
+                    cn = list(self.model.names.values()) if self.model else None
+                    self._game.on_start(1280, 720, cn)
+                except Exception:
+                    pass
 
         self.streaming = True
         self.start_btn.configure(state=tk.DISABLED)
@@ -392,7 +714,6 @@ class YoloStreamApp(tk.Tk):
         self._fps_times.clear()
         self._infer_fps_times.clear()
 
-        # Two background threads: capture → infer → display queue
         threading.Thread(target=self._capture_thread, daemon=True).start()
         threading.Thread(target=self._infer_thread, daemon=True).start()
         self._render_loop()
@@ -402,20 +723,27 @@ class YoloStreamApp(tk.Tk):
         if self.cap:
             self.cap.release()
             self.cap = None
+        self.tracker.reset()
+
+        with self._game_lock:
+            if self._game is not None:
+                try:
+                    self._game.on_stop()
+                except Exception:
+                    pass
+
         self.start_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self.canvas.delete("all")
         self.status_var.set("Stream stopped.")
 
-    # ── Thread 1: capture frames ─────────────
+    # ── Thread 1: capture ────────────────────
 
     def _capture_thread(self):
-        """Reads camera frames as fast as possible and pushes to raw queue."""
         while self.streaming and self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
             if not ret:
                 break
-            # Drop oldest if queue is full (keeps latency low)
             if self._raw_queue.full():
                 try:
                     self._raw_queue.get_nowait()
@@ -423,12 +751,13 @@ class YoloStreamApp(tk.Tk):
                     pass
             self._raw_queue.put(frame)
 
-    # ── Thread 2: inference ──────────────────
+    # ── Thread 2: inference + tracking + pose + game ──
 
     def _infer_thread(self):
-        """Pulls raw frames, runs YOLO, pushes annotated frames to display queue."""
         frame_count = 0
         last_boxes: list = []
+        last_results = []
+        last_scale   = (1.0, 1.0)
         use_half = self.use_half.get() and DEVICE.startswith("cuda")
 
         while self.streaming:
@@ -437,77 +766,112 @@ class YoloStreamApp(tk.Tk):
             except queue.Empty:
                 continue
 
+            if self.mirror_var.get():
+                frame = cv2.flip(frame, 1)
+
             frame_count += 1
             run_infer = (frame_count % max(1, self.skip_var.get()) == 0)
 
-            # Resize for faster inference
-            infer_frame = cv2.resize(frame, (self.imgsz_var.get(), self.imgsz_var.get()))
+            orig_h, orig_w = frame.shape[:2]
 
             if run_infer:
+                imgsz = self.imgsz_var.get()
                 t0 = time.perf_counter()
+                # Pass original frame; YOLO letterboxes internally.
+                # Pre-resizing to a square causes keypoints to be None.
                 results = self.model(
-                    infer_frame,
+                    frame,
                     verbose=False,
                     conf=self.confidence.get(),
                     device=DEVICE,
                     half=use_half,
-                    imgsz=self.imgsz_var.get(),
+                    imgsz=imgsz,
                 )
                 t1 = time.perf_counter()
                 self._infer_fps_times.append(t1)
                 if len(self._infer_fps_times) > 30:
                     self._infer_fps_times.pop(0)
 
-                # Scale boxes back to original frame size
-                orig_h, orig_w = frame.shape[:2]
-                infer_h, infer_w = infer_frame.shape[:2]
-                sx = orig_w / infer_w
-                sy = orig_h / infer_h
+                # Coords are in original-frame space when YOLO handles resizing
+                sx, sy = 1.0, 1.0
 
-                last_boxes = []
+                raw_boxes = []
                 for result in results:
                     for box in result.boxes:
                         cls_id = int(box.cls[0])
                         label = self.model.names.get(cls_id, str(cls_id))
                         conf_score = float(box.conf[0])
                         x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        last_boxes.append((
+                        raw_boxes.append((
                             label, conf_score,
-                            int(x1 * sx), int(y1 * sy),
-                            int(x2 * sx), int(y2 * sy),
+                            int(x1), int(y1),
+                            int(x2), int(y2),
                         ))
 
-            # Draw on full-res frame
-            annotated = frame.copy()
-            for (label, conf_score, x1, y1, x2, y2) in last_boxes:
-                s = self.label_styles.get(label)
-                color, thick = s["color_bgr"], s["thickness"]
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thick)
-                text = f"{label} {conf_score:.2f}"
-                (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-                cv2.rectangle(annotated, (x1, y2), (x1 + tw + 4, y2 + th + 8), color, -1)
-                cv2.putText(annotated, text, (x1 + 2, y2 + th + 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+                if self.tracking_enabled.get():
+                    last_boxes = self.tracker.update(raw_boxes)
+                else:
+                    self.tracker.reset()
+                    last_boxes = raw_boxes
 
-            # Push to display queue (drop oldest if full)
+                last_results = results
+                last_scale   = (sx, sy)   # cache alongside results
+                self._last_detections = list(last_boxes)  # snapshot for game
+                self._last_kps = extract_keypoints(
+                    results, scale_xy=(sx, sy),
+                    conf_threshold=self.pose_styles.conf_threshold,
+                )
+
+            # ── Draw ──
+            annotated = frame.copy()
+
+            if self.show_boxes_var.get():
+                for (label, conf_score, x1, y1, x2, y2) in last_boxes:
+                    s = self.label_styles.get(label)
+                    color, thick = s["color_bgr"], s["thickness"]
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thick)
+                    text = f"{label} {conf_score:.2f}"
+                    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+                    cv2.rectangle(annotated, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+                    cv2.putText(annotated, text, (x1 + 2, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+            if last_results and (self.pose_styles.show_keypoints or self.pose_styles.show_skeleton):
+                self.pose_renderer.draw(annotated, last_results, scale_xy=last_scale)
+
+            # ── Game overlay ──
+            with self._game_lock:
+                if self._game is not None:
+                    try:
+                        _call = getattr(self._game, "_tick", None) or self._game.on_frame
+                        annotated = _call(
+                            annotated, self._last_kps,
+                            self._last_detections,
+                            orig_w, orig_h,
+                        )
+                    except Exception as exc:
+                        cv2.putText(annotated, f"Game error: {exc}",
+                                    (8, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                    (0, 0, 255), 1, cv2.LINE_AA)
+
             rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
             if self._display_queue.full():
                 try:
                     self._display_queue.get_nowait()
                 except queue.Empty:
                     pass
-            self._display_queue.put(rgb)
+            self._display_queue.put((rgb, len(last_boxes)))
 
-    # ── Render loop (main thread) ────────────
+    # ── Render loop (main thread) ─────────────
 
     def _render_loop(self):
         if not self.streaming:
             return
 
         try:
-            frame = self._display_queue.get_nowait()
+            frame, n_tracks = self._display_queue.get_nowait()
         except queue.Empty:
-            frame = None
+            frame, n_tracks = None, None
 
         if frame is not None:
             now = time.perf_counter()
@@ -523,7 +887,6 @@ class YoloStreamApp(tk.Tk):
                 self.canvas.create_image(0, 0, anchor="nw", image=photo, tags="frame")
                 self.canvas.image = photo
 
-            # Update FPS stats
             if len(self._fps_times) >= 2:
                 disp_fps = (len(self._fps_times) - 1) / (self._fps_times[-1] - self._fps_times[0])
             else:
@@ -533,9 +896,36 @@ class YoloStreamApp(tk.Tk):
                     self._infer_fps_times[-1] - self._infer_fps_times[0])
             else:
                 infer_fps = 0.0
-            self.fps_var.set(f"Display: {disp_fps:5.1f} fps\nInfer:   {infer_fps:5.1f} fps")
+
+            self.fps_var.set(
+                f"Display: {disp_fps:5.1f} fps\n"
+                f"Infer:   {infer_fps:5.1f} fps\n"
+                f"Tracks:  {n_tracks if n_tracks is not None else '—'}"
+            )
 
         self.after(self.RENDER_DELAY_MS, self._render_loop)
+
+    def _game_key(self, event=None):
+        """Forward keyboard events to active game."""
+        with self._game_lock:
+            if self._game is None:
+                return
+            key = event.keysym if event else ""
+            if key == "space":
+                self._game.toggle_pause()
+                return
+            if key.lower() == "r" and self._game._paused:
+                self._game.reset()
+                self._game._paused = False
+                return
+            if key.lower() == "x" and hasattr(self._game, "toggle_xy"):
+                self._game.toggle_xy()
+                mode = "ON" if self._game._xy_mode else "OFF"
+                self._game_status_var.set(f"XY mode: {mode}")
+            if key.lower() == "d" and hasattr(self._game, "toggle_debug"):
+                self._game.toggle_debug()
+            if hasattr(self._game, "tune"):
+                self._game.tune(key)
 
     def on_close(self):
         self._stop_stream()

@@ -9,7 +9,13 @@ import json
 import shutil
 
 from .photometric_module import change_exposure, change_saturation
+from .photometric_module_2 import gaussian_blur, motion_blur, contrast, hue_shift
 from .geometric_module import change_scale, yolo_scale_label
+from .augment_strategy import (
+	AugSpec,
+	apply_augmentations_to_dir,
+	MODE_ALL, MODE_RANDOM, MODE_CALC,
+)
 import augmentation.config as config
 
 #	this is cool, its a function that you input another function as a parameter, it overrides it so that it loops through
@@ -194,6 +200,70 @@ def dir_change_scale(input_dir, output_dir, saturation_list: List[float], name_c
 		partial_change_scale, name_conv
 		)
 
+def dir_gaussian_blur(input_dir, output_dir, blur_list: List[float], name_conv: str = ""):
+	"""
+	Apply gaussian blur to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param blur_list: list of blur amount percentages, 1.0 = base sigma 10
+	:type blur_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = blur value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	_dir_change_generic(
+		input_dir, output_dir, blur_list,
+		gaussian_blur, name_conv
+		)
+
+def dir_motion_blur(input_dir, output_dir, blur_list: List[float], name_conv: str = ""):
+	"""
+	Apply motion blur to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param blur_list: list of blur amount percentages, 1.0 = base 20 px streak
+	:type blur_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = blur value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	_dir_change_generic(
+		input_dir, output_dir, blur_list,
+		motion_blur, name_conv
+		)
+
+def dir_contrast(input_dir, output_dir, contrast_list: List[float], name_conv: str = ""):
+	"""
+	Apply contrast scaling to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param contrast_list: list of contrast amount percentages, 1.0 = no change
+	:type contrast_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = contrast value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	_dir_change_generic(
+		input_dir, output_dir, contrast_list,
+		contrast, name_conv
+		)
+
+def dir_hue_shift(input_dir, output_dir, hue_list: List[float], name_conv: str = ""):
+	"""
+	Apply hue shifting to all images in a directory.
+
+	:param input_dir: input directory path (str or Path)
+	:param output_dir: output directory path (str or Path)
+	:param hue_list: list of hue shift amounts, 1.0 = no change, 1.5 = +90 degrees
+	:type hue_list: List [ float ]
+	:param name_conv: naming convention, use {} for formatting: ind = index, val = hue value, file = og file name, ext = extention
+	:type name_conv: string format
+	"""
+	_dir_change_generic(
+		input_dir, output_dir, hue_list,
+		hue_shift, name_conv
+		)
+
 def yolo_change_exposure(input_dataset, output_dataset, exposure_list: List[float], name_conv: str = ""):
 	"""
 	Apply exposure changes to all directories in a yolov8 dataset
@@ -248,6 +318,82 @@ def yolo_change_resize(input_dataset, output_dataset, resize_list: List[float], 
 	_yolo_dataset_generic(
 		input_dataset, _yolo_resize_function,
 		resize_list, name_conv,
+		output_dataset
+		)
+
+def yolo_gaussian_blur(input_dataset, output_dataset, blur_list: List[float], name_conv: str = ""):
+	"""
+	Apply gaussian blur to all directories in a yolov8 dataset
+
+	:param input_dataset: input dataset path
+	:param output_dataset: output dataset path
+	:param blur_list: list of values to augment
+	:type blur_list: List[float]
+	:param name_conv: naming convention
+	:type name_conv: str
+	"""
+	if not output_dataset or input_dataset == output_dataset:
+		output_dataset = None
+	_yolo_dataset_generic(
+		input_dataset, _yolo_gaussian_blur_function,
+		blur_list, name_conv,
+		output_dataset
+		)
+
+def yolo_motion_blur(input_dataset, output_dataset, blur_list: List[float], name_conv: str = ""):
+	"""
+	Apply motion blur to all directories in a yolov8 dataset
+
+	:param input_dataset: input dataset path
+	:param output_dataset: output dataset path
+	:param blur_list: list of values to augment
+	:type blur_list: List[float]
+	:param name_conv: naming convention
+	:type name_conv: str
+	"""
+	if not output_dataset or input_dataset == output_dataset:
+		output_dataset = None
+	_yolo_dataset_generic(
+		input_dataset, _yolo_motion_blur_function,
+		blur_list, name_conv,
+		output_dataset
+		)
+
+def yolo_contrast(input_dataset, output_dataset, contrast_list: List[float], name_conv: str = ""):
+	"""
+	Apply contrast scaling to all directories in a yolov8 dataset
+
+	:param input_dataset: input dataset path
+	:param output_dataset: output dataset path
+	:param contrast_list: list of values to augment
+	:type contrast_list: List[float]
+	:param name_conv: naming convention
+	:type name_conv: str
+	"""
+	if not output_dataset or input_dataset == output_dataset:
+		output_dataset = None
+	_yolo_dataset_generic(
+		input_dataset, _yolo_contrast_function,
+		contrast_list, name_conv,
+		output_dataset
+		)
+
+def yolo_hue_shift(input_dataset, output_dataset, hue_list: List[float], name_conv: str = ""):
+	"""
+	Apply hue shifting to all directories in a yolov8 dataset
+
+	:param input_dataset: input dataset path
+	:param output_dataset: output dataset path
+	:param hue_list: list of values to augment
+	:type hue_list: List[float]
+	:param name_conv: naming convention
+	:type name_conv: str
+	"""
+	if not output_dataset or input_dataset == output_dataset:
+		output_dataset = None
+	_yolo_dataset_generic(
+		input_dataset, _yolo_hue_shift_function,
+		hue_list, name_conv,
 		output_dataset
 		)
 
@@ -515,3 +661,163 @@ def _yolo_resize_function(
 
 	if config.VERBOSE:
 		print(f"Created {len(image_files)*len(value_list)} resized images from {len(image_files)} images")
+
+def _yolo_gaussian_blur_function(
+	img_in_dir, img_out_dir,
+	labels_in_dir, labels_out_dir,
+	value_list, name_conv
+	):
+	"""This is used to combine the gaussian blur functions for the _yolo_dataset_generic input"""
+	_dir_change_generic(
+		img_in_dir, img_out_dir, value_list,
+		gaussian_blur, name_conv
+		)
+	_yolo_copy_labels(
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv
+		)
+
+def _yolo_motion_blur_function(
+	img_in_dir, img_out_dir,
+	labels_in_dir, labels_out_dir,
+	value_list, name_conv
+	):
+	"""This is used to combine the motion blur functions for the _yolo_dataset_generic input"""
+	_dir_change_generic(
+		img_in_dir, img_out_dir, value_list,
+		motion_blur, name_conv
+		)
+	_yolo_copy_labels(
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv
+		)
+
+def _yolo_contrast_function(
+	img_in_dir, img_out_dir,
+	labels_in_dir, labels_out_dir,
+	value_list, name_conv
+	):
+	"""This is used to combine the contrast functions for the _yolo_dataset_generic input"""
+	_dir_change_generic(
+		img_in_dir, img_out_dir, value_list,
+		contrast, name_conv
+		)
+	_yolo_copy_labels(
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv
+		)
+
+def _yolo_hue_shift_function(
+	img_in_dir, img_out_dir,
+	labels_in_dir, labels_out_dir,
+	value_list, name_conv
+	):
+	"""This is used to combine the hue shift functions for the _yolo_dataset_generic input"""
+	_dir_change_generic(
+		img_in_dir, img_out_dir, value_list,
+		hue_shift, name_conv
+		)
+	_yolo_copy_labels(
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv
+		)
+
+
+#====================================================================================================
+#  Strategy-based augmentation  (all / random / calc)
+#====================================================================================================
+
+def yolo_augment(
+	input_dataset:  str,
+	output_dataset: str,
+	aug_config:     dict,
+	mode:           str = MODE_ALL,
+	num:            int = 1,
+):
+	"""
+	Apply augmentations to a full YOLOv8 dataset using a chosen strategy.
+
+	This is the single entry point used by dataset_config.run_augmentations()
+	when --augment is specified.  All aug types are combined into one pass per
+	image so augmentations can be stacked (e.g. exposure + contrast + blur on
+	the same output image), avoiding the multiplicative explosion of chaining
+	separate yolo_change_* calls.
+
+	:param input_dataset:  Path to the source YOLOv8 dataset (contains data.yaml)
+	:param output_dataset: Path for the augmented output dataset
+	:param aug_config:     Dict mapping aug-type names to value lists, e.g.:
+	                         {
+	                           'exposure':      [0.615, 1.0, 1.385],
+	                           'contrast':      [0.7, 1.0, 1.3],
+	                           'resize':        [0.5, 1.0, 1.5],
+	                           'motion_blur':   [1.0, 1.5],
+	                           'gaussian_blur': [1.0, 1.5],
+	                           'hue_shift':     [0.8, 1.2],
+	                           'saturation':    [0.7, 1.3],
+	                         }
+	                       Keys with empty lists or None are skipped.
+	:param mode:           'all' | 'random' | 'calc'
+	:param num:            Number of augmented images per original (random/calc only)
+	"""
+	#	Map aug-type name -> (photometric/geometric function, optional label function)
+	_AUG_FUNCS = {
+		'exposure'     : (change_exposure,  None),
+		'contrast'     : (contrast,         None),
+		'gaussian_blur': (gaussian_blur,     None),
+		'motion_blur'  : (motion_blur,       None),
+		'hue_shift'    : (hue_shift,         None),
+		'saturation'   : (change_saturation, None),
+		'resize'       : (change_scale,      yolo_scale_label),
+	}
+
+	#	Build AugSpec list from aug_config, preserving a sensible application order
+	_ORDER = ['exposure', 'contrast', 'resize', 'motion_blur', 'gaussian_blur', 'hue_shift', 'saturation']
+	aug_specs = []
+	for name in _ORDER:
+		vals = aug_config.get(name)
+		if not vals:
+			continue
+		func, label_func = _AUG_FUNCS[name]
+		aug_specs.append(AugSpec(name=name, func=func, values=list(vals), label_func=label_func))
+
+	if not aug_specs:
+		print("[yolo_augment] No active augmentation specs, nothing to do.")
+		return
+
+	_yolo_dataset_generic(
+		yaml_path    = input_dataset,
+		augment_func = _make_strategy_func(aug_specs, mode, num),
+		value_list   = [1.0],		#	value_list unused by strategy func, passed as dummy
+		name_conv    = "",
+		new_dataset  = output_dataset if output_dataset != input_dataset else None,
+	)
+
+
+def _make_strategy_func(
+	aug_specs: List[AugSpec],
+	mode:      str,
+	num:       int,
+) -> Callable:
+	"""
+	Returns a _yolo_*_function-compatible callable that uses apply_augmentations_to_dir.
+
+	The returned function has the same signature as the existing _yolo_*_function helpers:
+	  f(img_in_dir, img_out_dir, labels_in_dir, labels_out_dir, value_list, name_conv)
+	so it plugs straight into _yolo_dataset_generic.
+	"""
+	def _strategy_func(
+		img_in_dir, img_out_dir,
+		labels_in_dir, labels_out_dir,
+		value_list, name_conv		#	value_list/name_conv ignored — strategy manages naming
+	):
+		apply_augmentations_to_dir(
+			images_dir     = img_in_dir,
+			images_out_dir = img_out_dir,
+			labels_dir     = labels_in_dir,
+			labels_out_dir = labels_out_dir,
+			aug_specs      = aug_specs,
+			mode           = mode,
+			num            = num,
+		)
+
+	return _strategy_func

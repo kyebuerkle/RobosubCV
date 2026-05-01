@@ -28,11 +28,20 @@ Setup:
 
 Follow these steps to setup Tempest to run the repository.
 ```
+module load Anaconda3/2024.02-1
+cd $HOME/RobosubCV
+bash env_setup.sh
+```
+
+--- *Legacy* ---
+```
 cd $HOME
 module load Anaconda3/2024.02-1
 conda create -n Training python=3.12 -y
-conda activate Training
+source activate Training
 ```
+--- *Legacy* ---
+
 This creates our *Training* environment. Use `conda env list` to list your environments to pick from. 
 If `conda activate Training` asks for `conda init`. Run these steps:
 ```
@@ -45,6 +54,7 @@ source activate Training
 ```
 And you should see (Training) to the left of your Tempest login.
 
+--- *Legacy: env_setup.sh does this for you* ---
 In *Training* we need to install torchvision, to manage the GPUs in Tempest, and Poetry, to manage our repository dependencies.
 ```
 pip3 install --upgrade torch torchvision torchaudio
@@ -52,6 +62,7 @@ pip install poetry
 # disable poetry virtual environment
 poetry config virtualenvs.create false
 ```
+--- *Legacy* ---
 
 Use `conda deactivate` to exit the environment.
 
@@ -73,19 +84,3 @@ Now you can delete the `ROBOFLOW_API` in the train.sbatch script (or just leave 
 After setting up Tempest with the [Repository](../README.md) cloned, there are a couple validation scripts. These validate that the environment is set up correctly, that the scripts can run in Tempest jobs, and that the team can get a working YOLO model.
 
 ...TODO...
-
-##		NOTES
-
-```
-python - <<PY
-import torch
-print("Torch:", torch.__version__)
-print("CUDA build:", torch.version.cuda)
-print("Available:", torch.cuda.is_available())
-print("GPU:", torch.cuda.get_device_name(0))
-PY
-```
-(This should print the GPU name)
-I need to put this in a script to run IN the sbatch. I should make scripts to verify Tempest works with our environment setup.
-
-I will also verify roboflow log in.

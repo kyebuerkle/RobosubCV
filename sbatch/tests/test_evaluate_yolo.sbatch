@@ -11,7 +11,7 @@
 ## 500GB for Quad A100
 #SBATCH --mem=128G
 #SBATCH --time=0-04:00:00
-#SBATCH --job-name=RobosubCV-spec-1-3
+#SBATCH --job-name=RobosubCV-Obj-2
 ## %x is the job name and %j and the job number
 #SBATCH --output=./stream-out/%x-%j.out
 #SBATCH --error=./stream-out/%x-%j.err
@@ -20,25 +20,26 @@ module load Anaconda3/4.0.0
 source activate $HOME/.conda/envs/Training
 cd $HOME/RobosubCV/src/model_training/tests
 
+CONFIGFILE=$HOME/RobosubCV/src/configuration.json
 MODELS=(
-../../../results/1-3-models/both-45.pt
-../../../results/1-3-models/exposure-45.pt
-../../../results/1-3-models/saturation-45.pt
+$HOME/RobosubCV/results/[MODEL]
 )
-DATASET=$HOME/RobosubCV/data/2025-robosub-on-site-2-v3-tests/data.yaml
-CONFIDENCE=0.5
+DATASET=$HOME/RobosubCV/data/[DATASET]/data.yaml
 SPLIT=(
 test
 train
-valid
-all
+val
 )
 
 #	device is, cpu= 1 cpu, 0= 1 GPU, 0,1= 2 GPU
 DEVICE=0,1
 
 poetry install
-poetry run python test_evaluate_yolo.py -m "${MODELS[@]}" -d $DATASET --device $DEVICE --conf $CONFIDENCE --split "${SPLIT[@]}"
+
+echo "Running evaluate_yolo_labels.py..."
+poetry run python evaluate_yolo_labels.py -m "${MODELS[@]}" -d $DATASET --device $DEVICE --splits "${SPLIT[@]}"
+
+echo "Summarizing yolo results..."
+poetry run python summarize_yolo_results.py -d ./output -o otuput/summarized_yolo_results.csv
 
 cd $HOME/RobosubCV/sbatch
-
