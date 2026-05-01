@@ -189,6 +189,9 @@ Log "Configuring Poetry to use the current environment..."
 poetry config virtualenvs.create false --local 2>$null
 
 Log "Running poetry install..."
+if (Test-Path "poetry.lock") {
+    Remove-Item "poetry.lock"
+}
 poetry install
 if ($LASTEXITCODE -ne 0) { Err "poetry install failed."; exit 1 }
 

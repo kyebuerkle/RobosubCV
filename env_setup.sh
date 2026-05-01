@@ -320,6 +320,9 @@ log "Configuring Poetry to use the current environment..."
 poetry config virtualenvs.create false --local 2>/dev/null || true
 
 log "Running poetry install..."
+if [ -f "poetry.lock" ]; then
+    rm "poetry.lock"
+fi
 poetry install || { err "poetry install failed."; exit 1; }
 
 # -- Final summary -------------------------------------------------------------

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "robosubcv"
-version = "2.3.1"
+version = "2.3.2"
 description = "Robosub Computer Vision repo for Capstone"
 authors = ["Kye Buerkle <22kyebue@gmail.com>"]
 license = "MIT"
@@ -16,7 +16,7 @@ pandas = "^3.0.0"
 roboflow = "^1.2.13"
 pytest = "^9.0.2"
 argparse = "^1.4.0"
-# this script needs ultralytics
+# this script needs ultralytics, run the env_setup.sh script
 
 [build-system]
 requires = ["poetry-core"]
